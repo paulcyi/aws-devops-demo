@@ -19,6 +19,34 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Log in to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+          docker login --username AWS --password-stdin 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Build Docker image
+        run: |
+          docker build --no-cache -t aws-devops-demo .
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Tag and push Docker image to ECR
+        run: |
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)  # Short Git commit hash
+          docker tag aws-devops-demo:latest 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:$IMAGE_TAG
+          docker push 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:$IMAGE_TAG
+          docker push 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:latest
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v2
@@ -48,5 +76,3 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
-
-
