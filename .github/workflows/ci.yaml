@@ -1,0 +1,38 @@
+name: CI Build and Test
+
+# Run when there's a push to main or a pull request
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Check out the repo code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2) Set up Python to install dependencies / run tests
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # 3) Install Python dependencies (Flask, etc.)
+      - name: Install Python dependencies
+        run: |
+          pip install -r app/requirements.txt
+
+      # 4) (Optional) Run any tests you have. If you don’t have tests yet, keep it simple
+      - name: Run tests
+        run: |
+          echo "No tests yet - consider adding some soon!"
+          # e.g., pytest, flake8, or other checks in the future
+
+      # 5) Build Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t aws-devops-demo .
