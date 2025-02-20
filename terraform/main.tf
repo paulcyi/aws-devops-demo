@@ -7,6 +7,13 @@ terraform {
     }
   }
   required_version = ">= 1.0"
+
+  backend "s3" {
+    bucket = "aws-devops-demo-terraform-state"
+    key = "aws-devops-demo/terraform.tfstate"
+    region = "us-east-1"
+    encrypt = true
+  }
 }
 
 provider "aws" {
