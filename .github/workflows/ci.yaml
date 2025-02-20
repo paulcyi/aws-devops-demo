@@ -40,9 +40,17 @@ jobs:
       - name: Tag and push Docker image to ECR
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)  # Short Git commit hash
-          docker tag aws-devops-demo:latest 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:$IMAGE_TAG
-          docker push 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:$IMAGE_TAG
-          docker push 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo:latest
+          ECR_URI=724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo
+
+          # Tag the image with the commit hash
+          docker tag aws-devops-demo:latest $ECR_URI:$IMAGE_TAG
+
+          # Also explicitly tag it as "latest"
+          docker tag aws-devops-demo:latest $ECR_URI:latest
+
+          # Push both tags to ECR
+          docker push $ECR_URI:$IMAGE_TAG
+          docker push $ECR_URI:latest
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
