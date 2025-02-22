@@ -159,18 +159,26 @@ resource "aws_iam_policy" "ecr_push_policy" {
 }
 
 # ✅ IAM Role for GitHub Actions
-resource "aws_iam_role" "github_actions_role" {
-  name = "GitHubActionsECRRole"
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+}
+
+resource "aws_iam_role" "github_oidc_deploy" {
+  name = "GitHubOIDC-Deploy"
 
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow"
+        Effect    = "Allow",
         Principal = {
           Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
-        }
-        Action = "sts:AssumeRoleWithWebIdentity"
+        },
+        Action    = "sts:AssumeRoleWithWebIdentity",
         Condition = {
           StringLike = {
             "token.actions.githubusercontent.com:sub": "repo:paulcyi/aws-devops-demo:*"
@@ -181,78 +189,51 @@ resource "aws_iam_role" "github_actions_role" {
   })
 }
 
-resource "aws_iam_policy" "github_actions_base_permissions" {
-  name        = "GitHubActionsBasePermissions"
-  description = "Base permissions for GitHub Actions OIDC role"
-  
+resource "aws_iam_policy" "github_oidc_deploy_policy" {
+  name = "GitHubOIDCDeployPolicy"
+  path = "/"
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [
+      # ECR permissions, ECS, S3, CloudWatch, etc. as needed
       {
-        Effect = "Allow"
+        Effect = "Allow",
         Action = [
-          "iam:GetPolicy",
-          "iam:GetPolicyVersion",
-          "iam:ListPolicyVersions"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "github_actions_full_permissions" {
-  name        = "GitHubActionsFullPermissions"
-  description = "Full permissions for GitHub Actions OIDC role"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "iam:CreatePolicy",
-          "iam:DeletePolicy",
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecs:*",
+          "logs:*",
+          "s3:*", 
+          # All the IAM actions Terraform needs to do:
           "iam:GetPolicy",
           "iam:GetPolicyVersion",
           "iam:ListPolicyVersions",
+          "iam:CreatePolicy",
+          "iam:DeletePolicy",
           "iam:CreatePolicyVersion",
           "iam:DeletePolicyVersion",
+          "iam:PassRole",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:GetRolePolicy",
+          "iam:ListEntitiesForPolicy",
           "iam:SetDefaultPolicyVersion",
           "iam:TagPolicy",
           "iam:UntagPolicy"
-        ]
+        ],
         Resource = "*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "github_actions_base_attach" {
-  role       = aws_iam_role.github_actions_role.name
-  policy_arn = aws_iam_policy.github_actions_base_permissions.arn
-}
-
-resource "aws_iam_role_policy_attachment" "github_actions_full_attach" {
-  role       = aws_iam_role.github_actions_role.name
-  policy_arn = aws_iam_policy.github_actions_full_permissions.arn
-}
-
-data "aws_caller_identity" "current" {}
-
-resource "aws_iam_openid_connect_provider" "github_actions" {
-  url = "https://token.actions.githubusercontent.com"
-  
-  client_id_list = ["sts.amazonaws.com"]
-  
-  thumbprint_list = [
-    "6938fd4d98bab03faadb97b34396831e3780aea1"  # GitHub's thumbprint
-  ]
-}
-
-resource "aws_iam_role_policy_attachment" "github_actions_ecr_policy_attach" {
-  role       = aws_iam_role.github_actions_role.name
-  policy_arn = aws_iam_policy.ecr_push_policy.arn
+resource "aws_iam_role_policy_attachment" "github_oidc_deploy_attach" {
+  role       = aws_iam_role.github_oidc_deploy.name
+  policy_arn = aws_iam_policy.github_oidc_deploy_policy.arn
 }
 
 # ✅ ECS Cluster & Task Definition: Defines the containerized app and execution role
