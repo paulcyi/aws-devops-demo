@@ -181,10 +181,30 @@ resource "aws_iam_role" "github_actions_role" {
   })
 }
 
-resource "aws_iam_role_policy" "github_actions_permissions" {
-  name = "GitHubActionsPermissions"
-  role = aws_iam_role.github_actions_role.id
+resource "aws_iam_policy" "github_actions_base_permissions" {
+  name        = "GitHubActionsBasePermissions"
+  description = "Base permissions for GitHub Actions OIDC role"
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:ListPolicyVersions"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
 
+resource "aws_iam_policy" "github_actions_full_permissions" {
+  name        = "GitHubActionsFullPermissions"
+  description = "Full permissions for GitHub Actions OIDC role"
+  
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -206,6 +226,16 @@ resource "aws_iam_role_policy" "github_actions_permissions" {
       }
     ]
   })
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_base_attach" {
+  role       = aws_iam_role.github_actions_role.name
+  policy_arn = aws_iam_policy.github_actions_base_permissions.arn
+}
+
+resource "aws_iam_role_policy_attachment" "github_actions_full_attach" {
+  role       = aws_iam_role.github_actions_role.name
+  policy_arn = aws_iam_policy.github_actions_full_permissions.arn
 }
 
 data "aws_caller_identity" "current" {}
