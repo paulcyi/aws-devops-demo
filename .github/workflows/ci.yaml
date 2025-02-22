@@ -1,4 +1,4 @@
-name: CI Build, Test, Push to ECR, and Deploy Terraform
+name: CI/CD - Docker Build, Push, and Terraform Deploy
 
 on:
   push:
@@ -10,53 +10,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::724772086697:role/GitHubOIDC-Deploy
+          role-session-name: GitHubActionsSession
           aws-region: ${{ secrets.AWS_REGION }}
-      
+
+
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
           docker login --username AWS --password-stdin 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
 
-      - name: Build Docker image
-        run: |
-          docker build --no-cache -t aws-devops-demo .
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+      - name: Build Docker Image
+        run: docker build -t aws-devops-demo .
 
-      - name: Tag and push Docker image to ECR
+      - name: Tag and Push Docker Image to ECR
         run: |
-          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)  # Short Git commit hash
+          IMAGE_TAG=$(echo $GITHUB_REF_NAME)-$(echo $GITHUB_SHA | cut -c1-7)
           ECR_URI=724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo
 
-          # Tag the image with the commit hash
           docker tag aws-devops-demo:latest $ECR_URI:$IMAGE_TAG
-
-          # Also explicitly tag it as "latest"
           docker tag aws-devops-demo:latest $ECR_URI:latest
-
-          # Push both tags to ECR
+          
           docker push $ECR_URI:$IMAGE_TAG
           docker push $ECR_URI:latest
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
 
-      - name: Set up Terraform
+      - name: Set Up Terraform Environment
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: "1.5.7"
@@ -64,23 +48,20 @@ jobs:
       - name: Initialize Terraform
         run: |
           cd terraform
-          terraform init
+          terraform init -reconfigure
 
       - name: Run Terraform Plan
         run: |
           cd terraform
-          terraform plan
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          terraform plan -out=tfplan
 
-      - name: Apply Terraform (Only on main branch)
+      - name: Apply Terraform Changes (Main Branch Only)
         if: github.ref == 'refs/heads/main'
         run: |
           cd terraform
           terraform apply -auto-approve
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Force ECS Deployment
+        if: github.ref == 'refs/heads/main'
+        run: |
+          aws ecs update-service --cluster devops-demo-cluster --service devops-demo-service --force-new-deployment
