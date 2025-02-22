@@ -199,6 +199,14 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
           containerPort = 5001
         }
       ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group = "/ecs/devops-demo-task"
+          awslogs-region = "us-east-1"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
     }
   ])
 }
@@ -246,3 +254,9 @@ resource "aws_ecs_service" "devops_demo_service" {
 
   depends_on = [aws_lb_listener.http]
 }
+
+resource "aws_cloudwatch_log_group" "ecs_log_group" {
+  name = "/ecs/devops-demo-task"
+  retention_in_days = 7
+}
+
