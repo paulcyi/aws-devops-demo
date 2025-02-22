@@ -129,35 +129,6 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# ✅ IAM Policy to allow GitHub Actions to push to ECR
-resource "aws_iam_policy" "ecr_push_policy" {
-  name        = "GitHubActionsECRPush"
-  description = "Policy to allow GitHub Actions to push to ECR"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
-        ]
-        Resource = aws_ecr_repository.devops_demo_repo.arn
-      }
-    ]
-  })
-}
-
 # ✅ IAM Role for GitHub Actions
 data "aws_caller_identity" "current" {}
 
