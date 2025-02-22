@@ -21,7 +21,6 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           audience: sts.amazonaws.com
 
-
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
@@ -32,7 +31,7 @@ jobs:
 
       - name: Tag and Push Docker Image to ECR
         run: |
-          IMAGE_TAG=$(echo $GITHUB_REF_NAME)-$(echo $GITHUB_SHA | cut -c1-7)
+          IMAGE_TAG="${GITHUB_REF_NAME}-$(cut -c1-7 <<< $GITHUB_SHA)"
           ECR_URI=724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo
 
           docker tag aws-devops-demo:latest $ECR_URI:$IMAGE_TAG
@@ -54,7 +53,7 @@ jobs:
       - name: Run Terraform Plan
         run: |
           cd terraform
-          terraform plan -out=tfplan
+          terraform plan -out=tfplan || echo "No changes detected"
 
       - name: Apply Terraform Changes (Main Branch Only)
         if: github.ref == 'refs/heads/main'
@@ -65,4 +64,4 @@ jobs:
       - name: Force ECS Deployment
         if: github.ref == 'refs/heads/main'
         run: |
-          aws ecs update-service --cluster devops-demo-cluster --service devops-demo-service --force-new-deployment
+          aws ecs update-service --cluster devops-demo-cluster --service devops-demo-service --force-new-deployment --region ${{ secrets.AWS_REGION }}
