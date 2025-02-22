@@ -19,6 +19,7 @@ jobs:
           role-to-assume: arn:aws:iam::724772086697:role/GitHubOIDC-Deploy
           role-session-name: GitHubActionsSession
           aws-region: ${{ secrets.AWS_REGION }}
+          audience: sts.amazonaws.com
 
 
       - name: Log in to Amazon ECR
