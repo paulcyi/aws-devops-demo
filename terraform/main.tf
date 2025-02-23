@@ -169,6 +169,7 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
       {
         Effect = "Allow",
         Action = [
+          # ✅ Fix ECR Access Issues
           "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:PutImage",
@@ -176,12 +177,28 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
           "ecr:ListTagsForResource",
-          "ecr:DescribeRepositories",  
+          "ecr:DescribeRepositories",
+
+          # ✅ Fix EC2/VPC Read Issues
           "ec2:DescribeVpcs",
           "ec2:DescribeVpcClassicLink",
           "ec2:DescribeVpcClassicLinkDnsSupport",
+          "ec2:DescribeVpcAttribute",  # <-- ✅ Fixes VPC errors
+
+          # ✅ Fix OIDC & IAM Role Read Issues
           "iam:GetOpenIDConnectProvider",
           "iam:GetRole",
+          "iam:ListRolePolicies",  # <-- ✅ Fixes missing permission
+          "iam:GetPolicy",         # <-- ✅ Fixes IAM policy read errors
+          "iam:ListAttachedRolePolicies",
+
+          # ✅ Fix ECS Task Execution Role Issues
+          "iam:GetRole",
+          "iam:PassRole",
+          "iam:ListEntitiesForPolicy",
+          "iam:ListPolicyVersions",
+
+          # ✅ ECS, Logs, and S3 Permissions
           "ecs:*",
           "logs:*",
           "s3:*"
