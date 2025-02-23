@@ -169,44 +169,22 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
       {
         Effect = "Allow",
         Action = [
-          # ECR Permissions
           "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
-          "ecr:ListTagsForResource",  # ✅ Fix ECR error
-
-          # ECS, Logging, and S3 Permissions
+          "ecr:ListTagsForResource",
+          "ecr:DescribeRepositories",  
+          "ec2:DescribeVpcs",
+          "ec2:DescribeVpcClassicLink",
+          "ec2:DescribeVpcClassicLinkDnsSupport",
+          "iam:GetOpenIDConnectProvider",
+          "iam:GetRole",
           "ecs:*",
           "logs:*",
-          "s3:*", 
-
-          # IAM Permissions for Terraform
-          "iam:GetPolicy",
-          "iam:GetPolicyVersion",
-          "iam:ListPolicyVersions",
-          "iam:CreatePolicy",
-          "iam:DeletePolicy",
-          "iam:CreatePolicyVersion",
-          "iam:DeletePolicyVersion",
-          "iam:PassRole",
-          "iam:ListRolePolicies",
-          "iam:ListAttachedRolePolicies",
-          "iam:GetRolePolicy",
-          "iam:ListEntitiesForPolicy",
-          "iam:SetDefaultPolicyVersion",
-          "iam:TagPolicy",
-          "iam:UntagPolicy",
-
-          # EC2 Permissions (Fix Unauthorized VPC Error)
-          "ec2:DescribeVpcs",  
-          "ec2:DescribeVpcClassicLink",  
-
-          # IAM Permissions for OIDC Role
-          "iam:GetOpenIDConnectProvider",
-          "iam:GetRole"
+          "s3:*"
         ],
         Resource = "*"
       }
