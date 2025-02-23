@@ -166,7 +166,7 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      # ECR permissions, ECS, S3, CloudWatch, etc. as needed
+      # ✅ Existing permissions
       {
         Effect = "Allow",
         Action = [
@@ -178,8 +178,7 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
           "ecr:CompleteLayerUpload",
           "ecs:*",
           "logs:*",
-          "s3:*", 
-          # All the IAM actions Terraform needs to do:
+          "s3:*",
           "iam:GetPolicy",
           "iam:GetPolicyVersion",
           "iam:ListPolicyVersions",
@@ -195,6 +194,22 @@ resource "aws_iam_policy" "github_oidc_deploy_policy" {
           "iam:SetDefaultPolicyVersion",
           "iam:TagPolicy",
           "iam:UntagPolicy"
+        ],
+        Resource = "*"
+      },
+      
+      # ✅ New missing permissions
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:DescribeVpcs",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeRouteTables",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeInternetGateways",
+          "ecr:DescribeRepositories",
+          "iam:GetOpenIDConnectProvider",
+          "iam:GetRole"
         ],
         Resource = "*"
       }
