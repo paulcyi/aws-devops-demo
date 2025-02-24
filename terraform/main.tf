@@ -234,8 +234,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:UpdateService",
           "ecs:DescribeServices",
           "ecs:RegisterTaskDefinition",
-          "ecs:DeregisterTaskDefinition",
-          "ecs:DescribeClusters"
+          "ecs:DescribeClusters"  # Removed DeregisterTaskDefinition from here
         ]
         Resource = [
           aws_ecs_cluster.devops_demo_cluster.arn,
@@ -266,7 +265,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:ListEntitiesForPolicy",
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup",
-          "ecs:DescribeTaskDefinition"  # Moved here with broader scope
+          "ecs:DescribeTaskDefinition",
+          "ecs:DeregisterTaskDefinition"  # Added here with broader scope
         ]
         Resource = "*"
       }
