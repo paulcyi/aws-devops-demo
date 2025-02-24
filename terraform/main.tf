@@ -262,6 +262,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:ListAttachedRolePolicies",
           "iam:GetPolicyVersion",
           "iam:ListEntitiesForPolicy",
+          "iam:ListPolicyVersions",
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup",
           "ecs:DescribeTaskDefinition",
