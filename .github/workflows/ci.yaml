@@ -60,14 +60,12 @@ jobs:
       - name: Run Terraform Plan
         run: |
           cd terraform
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           terraform plan -var "image_tag=$IMAGE_TAG"
-        env:
-          IMAGE_TAG: $(echo $GITHUB_SHA | cut -c1-7)
 
       - name: Apply Terraform (Only on main branch)
         if: github.ref == 'refs/heads/main'
         run: |
           cd terraform
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           terraform apply -auto-approve -var "image_tag=$IMAGE_TAG"
-        env:
-          IMAGE_TAG: $(echo $GITHUB_SHA | cut -c1-7)
