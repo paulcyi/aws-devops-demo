@@ -384,3 +384,43 @@ resource "aws_cloudwatch_log_group" "ecs_log_group" {
     Name = "devops-demo-logs"
   }
 }
+
+# DynamoDB Table for Hit Counter
+resource "aws_dynamodb_table" "demo_hits" {
+  name           = "DemoHits"
+  billing_mode   = "PAY_PER_REQUEST"  # Cost-effective for demo
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"  # String type for the key
+  }
+
+  tags = {
+    Name = "devops-demo-hits"
+  }
+}
+
+# IAM Policy for ECS Task to Access DynamoDB
+resource "aws_iam_policy" "ecs_dynamodb_access" {
+  name = "ECSDynamoDBAccess"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem"
+        ]
+        Resource = aws_dynamodb_table.demo_hits.arn
+      }
+    ]
+  })
+}
+
+# Attach DynamoDB Policy to ECS Task Execution Role
+resource "aws_iam_role_policy_attachment" "ecs_dynamodb_attach" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = aws_iam_policy.ecs_dynamodb_access.arn
+}

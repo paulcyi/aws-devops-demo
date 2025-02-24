@@ -1,10 +1,25 @@
 from flask import Flask
+import boto3
+import os
 
 app = Flask(__name__)
+dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+table = dynamodb.Table('DemoHits')
 
 @app.route("/")
 def index():
-    return "Welcome to my AWS DevOps Demo!"
+    try:
+        response = table.update_item(
+            Key={'id': 'hit_counter'},
+            UpdateExpression="SET hit_count = if_not_exists(hit_count, :start) + :inc",
+            ExpressionAttributeValues={':start': 0, ':inc': 1},
+            ReturnValues="UPDATED_NEW"
+        )
+        count = response['Attributes']['hit_count']
+        return f"Welcome to my AWS DevOps Demo! Page Hits: {int(count)}"
+    except Exception as e:
+        return f"Error accessing DynamoDB: {str(e)}", 500
 
 if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5001)
     app.run(host="0.0.0.0", port=5001)
