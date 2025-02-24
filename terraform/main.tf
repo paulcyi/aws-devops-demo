@@ -234,6 +234,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:UpdateService",
           "ecs:DescribeServices",
           "ecs:RegisterTaskDefinition",
+          "ecs:DeregisterTaskDefinition",
           "ecs:DescribeClusters"
         ]
         Resource = [
