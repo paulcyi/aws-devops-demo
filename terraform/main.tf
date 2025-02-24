@@ -234,7 +234,6 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:UpdateService",
           "ecs:DescribeServices",
           "ecs:RegisterTaskDefinition",
-          "ecs:DescribeTaskDefinition",
           "ecs:DescribeClusters"
         ]
         Resource = [
@@ -263,9 +262,10 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:GetPolicy",
           "iam:ListAttachedRolePolicies",
           "iam:GetPolicyVersion",
-          "iam:ListEntitiesForPolicy",  # Added for policy attachment refresh
+          "iam:ListEntitiesForPolicy",
           "logs:DescribeLogGroups",
-          "logs:ListTagsLogGroup"
+          "logs:ListTagsLogGroup",
+          "ecs:DescribeTaskDefinition"  # Moved here with broader scope
         ]
         Resource = "*"
       }
