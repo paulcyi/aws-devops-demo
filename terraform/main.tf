@@ -261,8 +261,9 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:GetRole",
           "iam:ListRolePolicies",
           "iam:GetPolicy",
-          "iam:ListAttachedRolePolicies",  # Added for attached policies
-          "iam:GetPolicyVersion",          # Added for policy version details
+          "iam:ListAttachedRolePolicies",
+          "iam:GetPolicyVersion",
+          "iam:ListEntitiesForPolicy",  # Added for policy attachment refresh
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup"
         ]
