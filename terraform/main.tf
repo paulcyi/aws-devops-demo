@@ -259,10 +259,12 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecr:ListTagsForResource",
           "iam:GetOpenIDConnectProvider",
           "iam:GetRole",
-          "iam:ListRolePolicies",      # Added for role policy refresh
-          "iam:GetPolicy",             # Added for policy refresh
+          "iam:ListRolePolicies",
+          "iam:GetPolicy",
+          "iam:ListAttachedRolePolicies",  # Added for attached policies
+          "iam:GetPolicyVersion",          # Added for policy version details
           "logs:DescribeLogGroups",
-          "logs:ListTagsLogGroup"      # Added for log group tags
+          "logs:ListTagsLogGroup"
         ]
         Resource = "*"
       }
