@@ -6,11 +6,11 @@ terraform {
       version = "~> 4.0"
     }
   }
-  required_version = ">= 1.0"
+  required_version = "~> 1.5.7"
 
   backend "s3" {
     bucket = "aws-devops-demo-terraform-state"
-    key = "aws-devops-demo/terraform.tfstate"
+    key    = "aws-devops-demo/terraform.tfstate"
     region = "us-east-1"
     encrypt = true
   }
@@ -23,6 +23,9 @@ provider "aws" {
 # ✅ Networking: Creates a VPC and public subnets
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
+  tags = {
+    Name = "devops-demo-vpc"
+  }
 }
 
 resource "aws_subnet" "public" {
@@ -31,10 +34,16 @@ resource "aws_subnet" "public" {
   cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
   map_public_ip_on_launch = true
   availability_zone       = element(["us-east-1a", "us-east-1b"], count.index)
+  tags = {
+    Name = "devops-demo-subnet-public-${count.index}"
+  }
 }
 
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
+  tags = {
+    Name = "devops-demo-igw"
+  }
 }
 
 resource "aws_route_table" "public_rt" {
@@ -43,6 +52,9 @@ resource "aws_route_table" "public_rt" {
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.gw.id
+  }
+  tags = {
+    Name = "devops-demo-public-rt"
   }
 }
 
@@ -59,6 +71,9 @@ resource "aws_ecr_repository" "devops_demo_repo" {
 
   encryption_configuration {
     encryption_type = "AES256"
+  }
+  tags = {
+    Name = "devops-demo-ecr"
   }
 }
 
@@ -80,6 +95,9 @@ resource "aws_security_group" "alb_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name = "devops-demo-alb-sg"
+  }
 }
 
 resource "aws_security_group" "ecs_sg" {
@@ -99,6 +117,9 @@ resource "aws_security_group" "ecs_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name = "devops-demo-ecs-sg"
+  }
 }
 
 # ✅ Application Load Balancer: Handles external traffic and routes to ECS
@@ -108,6 +129,9 @@ resource "aws_lb" "ecs_alb" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
   subnets            = aws_subnet.public[*].id
+  tags = {
+    Name = "devops-demo-alb"
+  }
 }
 
 resource "aws_lb_target_group" "ecs_target_group" {
@@ -116,6 +140,17 @@ resource "aws_lb_target_group" "ecs_target_group" {
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
+  health_check {
+    path                = "/"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+  tags = {
+    Name = "devops-demo-tg"
+  }
 }
 
 resource "aws_lb_listener" "http" {
@@ -129,7 +164,7 @@ resource "aws_lb_listener" "http" {
   }
 }
 
-# ✅ IAM Role for GitHub Actions
+# ✅ IAM for GitHub Actions (OIDC)
 data "aws_caller_identity" "current" {}
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
@@ -138,21 +173,20 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
-resource "aws_iam_role" "github_oidc_deploy" {
-  name = "GitHubOIDC-Deploy"
-
+resource "aws_iam_role" "github_actions_role" {
+  name = "GitHubActionsECRRole"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17",
+    Version = "2012-10-17"
     Statement = [
       {
-        Effect    = "Allow",
+        Effect = "Allow"
         Principal = {
           Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
-        },
-        Action    = "sts:AssumeRoleWithWebIdentity",
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
           StringLike = {
-            "token.actions.githubusercontent.com:sub": "repo:paulcyi/aws-devops-demo:*"
+            "token.actions.githubusercontent.com:sub" = "repo:paulcyi/aws-devops-demo:*" 
           }
         }
       }
@@ -160,67 +194,90 @@ resource "aws_iam_role" "github_oidc_deploy" {
   })
 }
 
-resource "aws_iam_policy" "github_oidc_deploy_policy" {
-  name = "GitHubOIDCDeployPolicy"
-  path = "/"
+resource "aws_iam_policy" "ecr_push_policy" {
+  name        = "GitHubActionsECRPush"
+  description = "Policy to allow GitHub Actions to push to ECR"
   policy = jsonencode({
-    Version = "2012-10-17",
+    Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow",
+        Effect = "Allow"
         Action = [
-          # ✅ Fix ECR Access Issues
-          "ecr:GetAuthorizationToken",
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecr:BatchCheckLayerAvailability",
           "ecr:PutImage",
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
-          "ecr:ListTagsForResource",
-          "ecr:DescribeRepositories",
+          "ecr:DescribeRepositories"
+        ]
+        Resource = aws_ecr_repository.devops_demo_repo.arn
+      }
+    ]
+  })
+}
 
-          # ✅ Fix EC2/VPC Read Issues
-          "ec2:DescribeVpcs",
-          "ec2:DescribeVpcClassicLink",
-          "ec2:DescribeVpcClassicLinkDnsSupport",
-          "ec2:DescribeVpcAttribute",  # <-- ✅ Fixes VPC errors
-
-          # ✅ Fix OIDC & IAM Role Read Issues
-          "iam:GetOpenIDConnectProvider",
-          "iam:GetRole",
-          "iam:ListRolePolicies",  # <-- ✅ Fixes missing permission
-          "iam:GetPolicy",         # <-- ✅ Fixes IAM policy read errors
-          "iam:ListAttachedRolePolicies",
-
-          # ✅ Fix ECS Task Execution Role Issues
-          "iam:GetRole",
-          "iam:PassRole",
-          "iam:ListEntitiesForPolicy",
-          "iam:ListPolicyVersions",
-
-          # ✅ ECS, Logs, and S3 Permissions
-          "ecs:*",
-          "logs:*",
-          "s3:*"
-        ],
+resource "aws_iam_policy" "github_terraform_policy" {
+  name = "GitHubActionsTerraform"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:UpdateService",
+          "ecs:DescribeServices",
+          "ecs:RegisterTaskDefinition",
+          "ecs:DescribeTaskDefinition"
+        ]
+        Resource = [
+          aws_ecs_cluster.devops_demo_cluster.arn,
+          aws_ecs_service.devops_demo_service.id,
+          aws_ecs_task_definition.devops_demo_task.arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+        Resource = "arn:aws:s3:::aws-devops-demo-terraform-state/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:Describe*",
+          "elasticloadbalancing:Describe*"
+        ]
         Resource = "*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "github_oidc_deploy_attach" {
-  role       = aws_iam_role.github_oidc_deploy.name
-  policy_arn = aws_iam_policy.github_oidc_deploy_policy.arn
+resource "aws_iam_role_policy_attachment" "github_actions_ecr" {
+  role       = aws_iam_role.github_actions_role.name
+  policy_arn = aws_iam_policy.ecr_push_policy.arn
 }
 
-# ✅ ECS Cluster & Task Definition: Defines the containerized app and execution role
+resource "aws_iam_role_policy_attachment" "github_actions_tf" {
+  role       = aws_iam_role.github_actions_role.name
+  policy_arn = aws_iam_policy.github_terraform_policy.arn
+}
+
+# ✅ ECS Cluster & Task Definition
 resource "aws_ecs_cluster" "devops_demo_cluster" {
   name = "devops-demo-cluster"
-}
-
-variable "ecs_task_family" {
-  default = "devops-demo-task"
+  tags = {
+    Name = "devops-demo-cluster"
+  }
 }
 
 resource "aws_ecs_task_definition" "devops_demo_task" {
@@ -229,12 +286,11 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
-
-  execution_role_arn = aws_iam_role.ecs_task_execution_role.arn
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   container_definitions = jsonencode([
     {
       name      = "devops-demo-container"
-      image     = "${aws_ecr_repository.devops_demo_repo.repository_url}:latest"
+      image     = "${aws_ecr_repository.devops_demo_repo.repository_url}:${var.image_tag}"
       cpu       = 256
       memory    = 512
       essential = true
@@ -246,13 +302,16 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group = "/ecs/devops-demo-task"
-          awslogs-region = "us-east-1"
+          awslogs-group         = aws_cloudwatch_log_group.ecs_log_group.name
+          awslogs-region        = var.aws_region
           awslogs-stream-prefix = "ecs"
         }
       }
     }
   ])
+  tags = {
+    Name = "devops-demo-task"
+  }
 }
 
 resource "aws_iam_role" "ecs_task_execution_role" {
@@ -275,12 +334,13 @@ resource "aws_iam_policy_attachment" "ecs_task_execution_role_attach" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ✅ ECS Service: Deploys the app and registers with the ALB
+# ✅ ECS Service
 resource "aws_ecs_service" "devops_demo_service" {
   name            = "devops-demo-service"
   cluster         = aws_ecs_cluster.devops_demo_cluster.id
   task_definition = aws_ecs_task_definition.devops_demo_task.arn
   launch_type     = "FARGATE"
+  desired_count   = 1
 
   network_configuration {
     subnets          = aws_subnet.public[*].id
@@ -294,12 +354,16 @@ resource "aws_ecs_service" "devops_demo_service" {
     container_port   = 5001
   }
 
-  desired_count = 1
-
   depends_on = [aws_lb_listener.http]
+  tags = {
+    Name = "devops-demo-service"
+  }
 }
 
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name = "/ecs/devops-demo-task"
+  name              = "/ecs/devops-demo-task"
   retention_in_days = 7
+  tags = {
+    Name = "devops-demo-logs"
+  }
 }
