@@ -1,3 +1,5 @@
 venv/
 .terraform/
 .terraform.lock.hcl
+.terraform/
+terraform.tfstate*
