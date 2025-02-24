@@ -267,7 +267,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:DescribeTaskDefinition",
           "ecs:DeregisterTaskDefinition",
           "ecs:RegisterTaskDefinition",
-          "ecs:TagResource"
+          "ecs:TagResource",
+          "iam:PassRole"
         ]
         Resource = "*"
       }
