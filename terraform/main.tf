@@ -266,7 +266,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "logs:ListTagsLogGroup",
           "ecs:DescribeTaskDefinition",
           "ecs:DeregisterTaskDefinition",
-          "ecs:RegisterTaskDefinition"  # Moved here with broader scope
+          "ecs:RegisterTaskDefinition",
+          "ecs:TagResource"
         ]
         Resource = "*"
       }
