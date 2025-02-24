@@ -263,6 +263,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:GetPolicyVersion",
           "iam:ListEntitiesForPolicy",
           "iam:ListPolicyVersions",
+          "iam:DeletePolicyVersion",
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup",
           "ecs:DescribeTaskDefinition",
