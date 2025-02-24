@@ -235,7 +235,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:DescribeServices",
           "ecs:RegisterTaskDefinition",
           "ecs:DescribeTaskDefinition",
-          "ecs:DescribeClusters"  # Added for ECS cluster refresh
+          "ecs:DescribeClusters"
         ]
         Resource = [
           aws_ecs_cluster.devops_demo_cluster.arn,
@@ -256,10 +256,13 @@ resource "aws_iam_policy" "github_terraform_policy" {
         Action = [
           "ec2:Describe*",
           "elasticloadbalancing:Describe*",
-          "ecr:ListTagsForResource",          # Added for ECR refresh
-          "iam:GetOpenIDConnectProvider",     # Added for OIDC provider refresh
-          "iam:GetRole",                      # Added for IAM role refresh
-          "logs:DescribeLogGroups"            # Added for CloudWatch logs refresh
+          "ecr:ListTagsForResource",
+          "iam:GetOpenIDConnectProvider",
+          "iam:GetRole",
+          "iam:ListRolePolicies",      # Added for role policy refresh
+          "iam:GetPolicy",             # Added for policy refresh
+          "logs:DescribeLogGroups",
+          "logs:ListTagsLogGroup"      # Added for log group tags
         ]
         Resource = "*"
       }
