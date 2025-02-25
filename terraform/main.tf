@@ -273,7 +273,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "ecs:TagResource",
           "iam:PassRole",
           "dynamodb:DescribeTable",
-          "dynamodb:DescribeContinuousBackups"
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:DescribeTimeToLive"
         ]
         Resource = "*"
       }
