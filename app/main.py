@@ -2,21 +2,47 @@ from flask import Flask
 import boto3
 import os
 import logging
+import time
+import botocore.exceptions
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+
+def get_dynamodb():
+    max_retries = 5  # Increase retries
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempting to fetch AWS credentials (attempt {attempt + 1}/{max_retries})")
+            sts_client = boto3.client('sts', region_name=AWS_REGION)
+            identity = sts_client.get_caller_identity()
+            logger.info(f"Credentials found: {identity}")
+            return boto3.resource('dynamodb', region_name=AWS_REGION)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'UnauthorizedOperation':
+                logger.error(f"Unauthorized operation: {str(e)}")
+            else:
+                logger.error(f"Failed to fetch credentials: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)  # Wait longer
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"Unexpected error fetching credentials: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                raise
+    raise Exception("Max retries reached for credentials")
+
+dynamodb = get_dynamodb()
 table = dynamodb.Table('DemoHits')
 
 @app.route("/")
 def index():
     try:
-        logger.info("Attempting to fetch AWS credentials")
-        sts_client = boto3.client('sts')
-        identity = sts_client.get_caller_identity()
-        logger.info(f"Credentials found: {identity}")
         logger.info("Attempting to update DynamoDB hit counter")
         response = table.update_item(
             Key={'id': 'hit_counter'},
