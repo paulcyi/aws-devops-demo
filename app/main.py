@@ -4,7 +4,7 @@ import os
 import logging
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)  # Log to stdout
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
@@ -13,6 +13,10 @@ table = dynamodb.Table('DemoHits')
 @app.route("/")
 def index():
     try:
+        logger.info("Attempting to fetch AWS credentials")
+        sts_client = boto3.client('sts')
+        identity = sts_client.get_caller_identity()
+        logger.info(f"Credentials found: {identity}")
         logger.info("Attempting to update DynamoDB hit counter")
         response = table.update_item(
             Key={'id': 'hit_counter'},
@@ -29,3 +33,4 @@ def index():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001)
+    
