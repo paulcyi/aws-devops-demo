@@ -233,7 +233,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
         Action = [
           "ecs:UpdateService",
           "ecs:DescribeServices",
-          "ecs:DescribeClusters"  # Removed RegisterTaskDefinition from here
+          "ecs:DescribeClusters"
         ]
         Resource = [
           aws_ecs_cluster.devops_demo_cluster.arn,
@@ -275,7 +275,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "dynamodb:DescribeTable",
           "dynamodb:DescribeContinuousBackups",
           "dynamodb:DescribeTimeToLive",
-          "dynamodb:ListTagsOfResource"
+          "dynamodb:ListTagsOfResource",
+          "iam:GetRolePolicy"
         ]
         Resource = "*"
       }
@@ -349,6 +350,23 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_task_execution_policy" {
+  name = "ecsTaskExecutionPolicy"
+  role = aws_iam_role.ecs_task_execution_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:UpdateItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem"
+      ]
+      Resource = "arn:aws:dynamodb:us-east-1:724772086697:table/DemoHits"
+    }]
+  })
+}
+
 resource "aws_iam_policy_attachment" "ecs_task_execution_role_attach" {
   name       = "ecs-task-execution-role-attach"
   roles      = [aws_iam_role.ecs_task_execution_role.name]
@@ -410,16 +428,15 @@ resource "aws_iam_policy" "ecs_dynamodb_access" {
   name = "ECSDynamoDBAccess"
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "dynamodb:UpdateItem",
-          "dynamodb:GetItem"
-        ]
-        Resource = aws_dynamodb_table.demo_hits.arn
-      }
-    ]
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:UpdateItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem"
+      ]
+      Resource = aws_dynamodb_table.demo_hits.arn
+    }]
   })
 }
 
