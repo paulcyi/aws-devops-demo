@@ -408,7 +408,7 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
         },
         {
           name  = "BUILD_TRIGGER"
-          value = "v2"
+          value = "v4"
         }
       ]
     }
