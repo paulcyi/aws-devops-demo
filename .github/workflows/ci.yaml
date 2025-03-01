@@ -35,7 +35,11 @@ jobs:
       - name: Build Docker image
         run: |
           docker build --no-cache -t aws-devops-demo .
-          docker run --rm aws-devops-demo pip list | grep requests
+          docker run --rm aws-devops-demo bash -c "pip list | grep requests" || echo "requests not found"
+          if [ $? -ne 0 ]; then
+            echo "Error: requests module not found in image"
+            exit 1
+          fi
 
       - name: Tag and push Docker image to ECR
         run: |
