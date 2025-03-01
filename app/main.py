@@ -3,9 +3,7 @@ import boto3
 import os
 import logging
 import time
-from botocore.config import Config
 from botocore.exceptions import ClientError
-from botocore.credentials import get_credentials
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -20,25 +18,8 @@ def get_dynamodb():
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt+1}/{max_retries} to connect to DynamoDB")
-            # Configure boto3 with explicit IMDSv2 support
-            boto_config = Config(
-                region_name=AWS_REGION,
-                retries={'max_attempts': 3, 'mode': 'standard'},
-                connect_timeout=5,
-                read_timeout=10,
-                imds_client_config={
-                    'retries': {'max_attempts': 5},
-                    'token_request_timeout': 5,
-                    'token_request_max_attempts': 5
-                }
-            )
-            # Explicitly fetch credentials with IMDSv2 token
-            credentials = get_credentials()
-            if not credentials or not credentials.token:
-                logger.error("No valid IMDSv2 token available")
-                raise Exception("Failed to retrieve IMDSv2 token")
-            logger.info("IMDSv2 token fetched successfully")
-            dynamodb = boto3.resource('dynamodb', config=boto_config)
+            # Use default IMDSv2 handling without imds_client_config
+            dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
             # Test connection
             dynamodb.meta.client.list_tables()
             logger.info("DynamoDB connection successful")
@@ -106,3 +87,4 @@ def health():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001)
+    
