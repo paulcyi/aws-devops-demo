@@ -134,20 +134,23 @@ resource "aws_lb" "ecs_alb" {
   }
 }
 
+# UPDATED: Modified the health check to use the /health endpoint
 resource "aws_lb_target_group" "ecs_target_group" {
   name        = "devops-demo-tg"
   port        = 5001
   protocol    = "HTTP"
   vpc_id      = aws_vpc.main.id
   target_type = "ip"
+  
   health_check {
-    path                = "/"
+    path                = "/health"  # Changed from "/" to "/health"
     matcher             = "200"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
+  
   tags = {
     Name = "devops-demo-tg"
   }
@@ -302,6 +305,73 @@ resource "aws_ecs_cluster" "devops_demo_cluster" {
   }
 }
 
+# NEW: Create a separate task role for runtime permissions
+resource "aws_iam_role" "ecs_task_role" {
+  name = "ecs-devops-demo-task-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+  tags = {
+    Name = "devops-demo-task-role"
+  }
+}
+
+# Task Execution Role (for pulling images and pushing logs)
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecsTaskExecutionRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+  tags = {
+    Name = "devops-demo-execution-role"
+  }
+}
+
+# UPDATED: Improved policy for DynamoDB access
+resource "aws_iam_policy" "ecs_dynamodb_access" {
+  name = "ECSDynamoDBAccess"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "dynamodb:UpdateItem",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DescribeTable",
+        "dynamodb:ListTables"
+      ]
+      Resource = aws_dynamodb_table.demo_hits.arn
+    }]
+  })
+}
+
+# Standard execution role policy attachment
+resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "task_role_dynamodb_access" {
+  role       = aws_iam_role.ecs_task_role.name
+  policy_arn = aws_iam_policy.ecs_dynamodb_access.arn
+}
+
+# UPDATED: Task definition now includes task_role_arn
 resource "aws_ecs_task_definition" "devops_demo_task" {
   family                   = var.ecs_task_family
   requires_compatibilities = ["FARGATE"]
@@ -309,6 +379,8 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
   cpu                      = "256"
   memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
+  task_role_arn            = aws_iam_role.ecs_task_role.arn  # Added task role
+  
   container_definitions = jsonencode([
     {
       name      = "devops-demo-container"
@@ -329,48 +401,17 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
           awslogs-stream-prefix = "ecs"
         }
       }
+      environment = [  # Added environment variables
+        {
+          name = "AWS_REGION",
+          value = var.aws_region
+        }
+      ]
     }
   ])
   tags = {
     Name = "devops-demo-task"
   }
-}
-
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "ecs-tasks.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "ecs_task_execution_policy" {
-  name = "ecsTaskExecutionPolicy"
-  role = aws_iam_role.ecs_task_execution_role.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:UpdateItem",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem"
-      ]
-      Resource = "arn:aws:dynamodb:us-east-1:724772086697:table/DemoHits"
-    }]
-  })
-}
-
-resource "aws_iam_policy_attachment" "ecs_task_execution_role_attach" {
-  name       = "ecs-task-execution-role-attach"
-  roles      = [aws_iam_role.ecs_task_execution_role.name]
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 # ✅ ECS Service
@@ -423,25 +464,13 @@ resource "aws_dynamodb_table" "demo_hits" {
   }
 }
 
-# IAM Policy for ECS Task to Access DynamoDB
-resource "aws_iam_policy" "ecs_dynamodb_access" {
-  name = "ECSDynamoDBAccess"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:UpdateItem",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem"
-      ]
-      Resource = aws_dynamodb_table.demo_hits.arn
-    }]
-  })
-}
-
-# Attach DynamoDB Policy to ECS Task Execution Role
-resource "aws_iam_role_policy_attachment" "ecs_dynamodb_attach" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = aws_iam_policy.ecs_dynamodb_access.arn
+# NEW: DynamoDB endpoint for better connectivity from private subnets
+resource "aws_vpc_endpoint" "dynamodb" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.dynamodb"
+  route_table_ids   = [aws_route_table.public_rt.id]
+  vpc_endpoint_type = "Gateway"
+  tags = {
+    Name = "devops-demo-dynamodb-endpoint"
+  }
 }
