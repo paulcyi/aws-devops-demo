@@ -34,12 +34,21 @@ jobs:
 
       - name: Build Docker image
         run: |
+          # Debug: Show requirements.txt content
+          cat app/requirements.txt
+          # Build the image
           docker build --no-cache -t aws-devops-demo .
-          docker run --rm aws-devops-demo bash -c "pip list | grep -i requests" || { echo "Error: requests module not found in image"; exit 1; }
+          # Verify build layers
+          docker images aws-devops-demo
+          # Check installed packages
+          docker run --rm aws-devops-demo bash -c "pip list" > pip_list.txt
+          cat pip_list.txt | grep -i requests || { echo "Error: requests module not found in image"; exit 1; }
           if [ $? -ne 0 ]; then
             echo "Build failed: requests not installed"
             exit 1
           fi
+          # Clean up
+          rm pip_list.txt
 
       - name: Tag and push Docker image to ECR
         run: |
