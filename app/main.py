@@ -4,6 +4,7 @@ import logging
 import time
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from botocore.credentials import get_credentials
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +25,17 @@ def get_dynamodb():
                 retries={'max_attempts': 3, 'mode': 'standard'},
                 connect_timeout=5,
                 read_timeout=10,
-                imds_client_config={'retries': {'max_attempts': 3}, 'token_request_timeout': 5}
+                imds_client_config={
+                    'retries': {'max_attempts': 3},
+                    'token_request_timeout': 5,
+                    'token_request_max_attempts': 5
+                }
             )
+            # Explicitly check credentials
+            credentials = get_credentials()
+            if not credentials or not credentials.token:
+                raise Exception("No valid IMDSv2 token available")
+            logger.info("Credentials fetched successfully")
             dynamodb = boto3.resource('dynamodb', config=boto_config)
             # Test connection
             dynamodb.meta.client.list_tables()
