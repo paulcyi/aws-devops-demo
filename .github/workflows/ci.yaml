@@ -35,6 +35,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build --no-cache -t aws-devops-demo .
+          docker run --rm aws-devops-demo pip list | grep requests
 
       - name: Tag and push Docker image to ECR
         run: |
