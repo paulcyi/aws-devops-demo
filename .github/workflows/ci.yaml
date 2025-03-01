@@ -35,9 +35,9 @@ jobs:
       - name: Build Docker image
         run: |
           docker build --no-cache -t aws-devops-demo .
-          docker run --rm aws-devops-demo bash -c "pip list | grep requests" || echo "requests not found"
+          docker run --rm aws-devops-demo bash -c "pip list | grep -i requests" || { echo "Error: requests module not found in image"; exit 1; }
           if [ $? -ne 0 ]; then
-            echo "Error: requests module not found in image"
+            echo "Build failed: requests not installed"
             exit 1
           fi
 
