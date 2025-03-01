@@ -407,8 +407,8 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
           value = var.aws_region
         },
         {
-          name  = "FORCE_UPDATE"
-          value = timestamp()
+          name  = "BUILD_TRIGGER"
+          value = "v2"
         }
       ]
     }
