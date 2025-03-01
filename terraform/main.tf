@@ -403,8 +403,12 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
       }
       environment = [  # Added environment variables
         {
-          name = "AWS_REGION",
+          name  = "AWS_REGION"
           value = var.aws_region
+        },
+        {
+          name  = "FORCE_UPDATE"
+          value = timestamp()
         }
       ]
     }
