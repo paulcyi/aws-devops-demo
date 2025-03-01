@@ -408,7 +408,7 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
         },
         {
           name  = "BUILD_TRIGGER"
-          value = "v5"
+          value = "v9"
         }
       ]
       image = "${aws_ecr_repository.devops_demo_repo.repository_url}:${var.image_tag}"
