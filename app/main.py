@@ -80,7 +80,7 @@ def index():
 
 @app.route("/health")
 def health():
-    logger.info("Health check passed with status 200")
+    logger.info(f"Health check passed with status 200 at {time.ctime()}")
     return "OK", 200
 
 if __name__ == "__main__":
