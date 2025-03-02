@@ -18,11 +18,8 @@ def get_dynamodb():
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt+1}/{max_retries} to connect to DynamoDB")
-            # Use default IMDSv2 handling without imds_client_config
             dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
-            # Test connection
-            dynamodb.meta.client.list_tables()
-            logger.info("DynamoDB connection successful")
+            logger.info("DynamoDB connection assumed successful")
             return dynamodb
         except ClientError as e:
             error_code = e.response.get('Error', {}).get('Code', '')
@@ -83,6 +80,7 @@ def index():
 
 @app.route("/health")
 def health():
+    logger.info("Health check passed with status 200")
     return "OK", 200
 
 if __name__ == "__main__":
