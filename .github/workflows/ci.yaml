@@ -1,58 +1,78 @@
-name: CI
+# CI/CD Pipeline for AWS DevOps Demo
+# Automates building, testing, and deploying the application to AWS ECS using Terraform and Docker
+name: CI/CD Pipeline
 
+# Triggers the workflow on push to main and pull requests
 on:
   push:
     branches:
       - main
   pull_request:
 
+# Define the job to run on an Ubuntu environment
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
+    # Permissions for OIDC authentication and repository access
     permissions:
-      id-token: write
-      contents: read
+      id-token: write    # Required for OIDC token to assume IAM role
+      contents: read     # Required for checking out the repository
+
+    # Environment variable for production deployment
+    env:
+      ENVIRONMENT: production
 
     steps:
-      - name: Checkout code
+      # Checkout the repository code
+      - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for potential versioning
 
-      - name: Set up Terraform
+      # Set up Terraform with a specific version
+      - name: Set Up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.5.7
+          terraform_version: 1.5.7  # Pin to a stable version
 
+      # Configure AWS credentials using OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::724772086697:role/GitHubActionsECRRole
           aws-region: us-east-1
+          audience: sts.amazonaws.com
 
+      # Authenticate Docker with AWS ECR
       - name: Login to Amazon ECR
         run: aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 724772086697.dkr.ecr.us-east-1.amazonaws.com
-        working-directory: .
 
+      # Initialize Terraform with upgraded dependencies and reconfigure backend
       - name: Initialize Terraform
         run: terraform init -upgrade -reconfigure
         working-directory: terraform
+        env:
+          TF_INPUT: false  # Disable interactive prompts
 
-      - name: Build Docker image
+      # Build and verify the Docker image
+      - name: Build and Verify Docker Image
         run: |
           docker build --no-cache -t aws-devops-demo -f Dockerfile .
           docker run --rm aws-devops-demo bash -c "pip list" > pip_list.txt
           cat pip_list.txt
           if ! grep -i "requests" pip_list.txt; then
-            echo "Error: requests module not found in image"
+            echo "Error: 'requests' module not found in image"
             exit 1
           fi
           if ! grep -i "boto3" pip_list.txt; then
-            echo "Error: boto3 module not found in image"
+            echo "Error: 'boto3' module not found in image"
             exit 1
           fi
           rm pip_list.txt
         working-directory: .
 
-      - name: Tag and push Docker image to ECR
+      # Tag and push the Docker image to ECR
+      - name: Tag and Push Docker Image to ECR
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           ECR_URI=724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo
@@ -63,6 +83,8 @@ jobs:
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
 
-      - name: Apply Terraform
+      # Apply Terraform changes to infrastructure
+      - name: Apply Terraform Changes
         run: terraform apply -auto-approve
         working-directory: terraform
+        
