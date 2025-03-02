@@ -269,8 +269,10 @@ resource "aws_iam_policy" "github_terraform_policy" {
         "dynamodb:DescribeTimeToLive",
         "dynamodb:ListTagsOfResource",
         "iam:GetRolePolicy",
-        "sns:GetTopicAttributes",                    
-        "application-autoscaling:DescribeScalableTargets"  
+        "sns:GetTopicAttributes",  
+        "sns:ListTagsForResource",                  
+        "application-autoscaling:DescribeScalableTargets",
+        "application-autoscaling:ListTagsForResource"
       ]
       Resource = "*"
     }]
