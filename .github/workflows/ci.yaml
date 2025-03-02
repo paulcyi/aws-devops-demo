@@ -1,54 +1,49 @@
-name: CI Build, Test, Push to ECR, and Deploy Terraform
+name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
 
-permissions:
-  id-token: write  # Required for OIDC token
-  contents: read   # For checkout
-
 jobs:
-  build-test-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Debug OIDC Token
-        run: echo $ACTIONS_ID_TOKEN_REQUEST_TOKEN
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
 
-      # Trigger workflow run
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::724772086697:role/GitHubActionsECRRole
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: us-east-1
 
-      - name: Log in to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-          docker login --username AWS --password-stdin 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      - name: Initialize Terraform
+        run: terraform init -upgrade  # Added -upgrade to sync provider versions
+        working-directory: terraform
 
       - name: Build Docker image
         run: |
-          # Debug: Show requirements.txt content
-          cat app/requirements.txt
-          # Build the image
           docker build --no-cache -t aws-devops-demo .
-          # Verify build layers
-          docker images aws-devops-demo
-          # Check installed packages
           docker run --rm aws-devops-demo bash -c "pip list" > pip_list.txt
-          cat pip_list.txt | grep -i requests || { echo "Error: requests module not found in image"; exit 1; }
-          if [ $? -ne 0 ]; then
-            echo "Build failed: requests not installed"
+          cat pip_list.txt
+          if ! grep -i "requests" pip_list.txt; then
+            echo "Error: requests module not found in image"
             exit 1
           fi
-          # Clean up
+          if ! grep -i "boto3" pip_list.txt; then
+            echo "Error: boto3 module not found in image"
+            exit 1
+          fi
           rm pip_list.txt
+        working-directory: app
 
       - name: Tag and push Docker image to ECR
         run: |
@@ -61,25 +56,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Initialize Terraform
-        run: |
-          cd terraform
-          terraform init -reconfigure
-
-      - name: Run Terraform Plan
-        run: |
-          cd terraform
-          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
-          terraform plan -var "image_tag=$IMAGE_TAG"
-
-      - name: Apply Terraform (Only on main branch)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          cd terraform
-          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
-          terraform apply -auto-approve -var "image_tag=$IMAGE_TAG"
+      - name: Apply Terraform
+        run: terraform apply -auto-approve
+        working-directory: terraform
+        
