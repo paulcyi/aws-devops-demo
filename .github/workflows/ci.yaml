@@ -9,6 +9,9 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout code
@@ -59,4 +62,3 @@ jobs:
       - name: Apply Terraform
         run: terraform apply -auto-approve
         working-directory: terraform
-        
