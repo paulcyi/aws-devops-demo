@@ -270,6 +270,7 @@ resource "aws_iam_policy" "github_terraform_policy" {
           "iam:CreatePolicyVersion",
           "logs:DescribeLogGroups",
           "logs:ListTagsLogGroup",
+          "logs:ListTagsForResource",
           "ecs:DescribeTaskDefinition",
           "ecs:DeregisterTaskDefinition",
           "ecs:RegisterTaskDefinition",
@@ -415,7 +416,7 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
       }
       environment = [
         { name = "AWS_REGION", value = var.aws_region },
-        { name = "BUILD_TRIGGER", value = "v13" }
+        { name = "BUILD_TRIGGER", value = "v14" }
       ]
     }
   ])
