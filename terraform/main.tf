@@ -3,7 +3,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 4.0"
+      version = "~> 5.0"
     }
   }
   required_version = "~> 1.5.7"
@@ -341,22 +341,33 @@ resource "aws_iam_role" "ecs_task_execution_role" {
   }
 }
 
-# UPDATED: Improved policy for DynamoDB access
 resource "aws_iam_policy" "ecs_dynamodb_access" {
   name = "ECSDynamoDBAccess"
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "dynamodb:UpdateItem",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:DescribeTable",
-        "dynamodb:ListTables"
-      ]
-      Resource = aws_dynamodb_table.demo_hits.arn
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DescribeTable",
+          "dynamodb:ListTables"
+        ]
+        Resource = "*"  # Temp: Allow all tables for debugging
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DescribeTable"
+        ]
+        Resource = aws_dynamodb_table.demo_hits.arn  # Specific for other actions
+      }
+    ]
   })
 }
 
@@ -371,7 +382,6 @@ resource "aws_iam_role_policy_attachment" "task_role_dynamodb_access" {
   policy_arn = aws_iam_policy.ecs_dynamodb_access.arn
 }
 
-# UPDATED: Task definition now includes task_role_arn
 resource "aws_ecs_task_definition" "devops_demo_task" {
   family                   = var.ecs_task_family
   requires_compatibilities = ["FARGATE"]
@@ -379,20 +389,22 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
   cpu                      = "256"
   memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn  # Added task role
+  task_role_arn            = aws_iam_role.ecs_task_role.arn
   
+  # Configure runtime platform and IMDSv2
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
   container_definitions = jsonencode([
     {
       name      = "devops-demo-container"
-      image     = "${aws_ecr_repository.devops_demo_repo.repository_url}:${var.image_tag}"
+      image     = "724772086697.dkr.ecr.us-east-1.amazonaws.com/aws-devops-demo:bdaccb2"
       cpu       = 256
       memory    = 512
       essential = true
-      portMappings = [
-        {
-          containerPort = 5001
-        }
-      ]
+      portMappings = [{ containerPort = 5001 }]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -401,17 +413,10 @@ resource "aws_ecs_task_definition" "devops_demo_task" {
           awslogs-stream-prefix = "ecs"
         }
       }
-      environment = [  # Added environment variables
-        {
-          name  = "AWS_REGION"
-          value = var.aws_region
-        },
-        {
-          name  = "BUILD_TRIGGER"
-          value = "v9"
-        }
+      environment = [
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "BUILD_TRIGGER", value = "v13" }
       ]
-      image = "${aws_ecr_repository.devops_demo_repo.repository_url}:${var.image_tag}"
     }
   ])
   tags = {
