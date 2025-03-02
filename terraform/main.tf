@@ -275,7 +275,8 @@ resource "aws_iam_policy" "github_terraform_policy" {
         "application-autoscaling:DescribeScalableTargets",
         "application-autoscaling:ListTagsForResource",
         "application-autoscaling:DescribeScalingPolicies",
-        "cloudwatch:DescribeAlarms"
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource"
       ]
       Resource = "*"
     }]
