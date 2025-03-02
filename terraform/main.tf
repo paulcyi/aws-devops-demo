@@ -356,7 +356,7 @@ resource "aws_iam_policy" "ecs_dynamodb_access" {
           "dynamodb:DescribeTable",
           "dynamodb:ListTables"
         ]
-        Resource = "*"  # Temp: Allow all tables for debugging
+        Resource = aws_dynamodb_table.demo_hits.arn
       },
       {
         Effect = "Allow"
