@@ -270,9 +270,12 @@ resource "aws_iam_policy" "github_terraform_policy" {
         "dynamodb:ListTagsOfResource",
         "iam:GetRolePolicy",
         "sns:GetTopicAttributes",  
-        "sns:ListTagsForResource",                  
+        "sns:ListTagsForResource",        
+        "sns:GetSubscriptionAttributes",          
         "application-autoscaling:DescribeScalableTargets",
-        "application-autoscaling:ListTagsForResource"
+        "application-autoscaling:ListTagsForResource",
+        "application-autoscaling:DescribeScalingPolicies",
+        "cloudwatch:DescribeAlarms"
       ]
       Resource = "*"
     }]
