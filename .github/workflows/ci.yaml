@@ -29,7 +29,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Initialize Terraform
-        run: terraform init -upgrade  # Added -upgrade to sync provider versions
+        run: terraform init -upgrade -migrate-state
         working-directory: terraform
 
       - name: Build Docker image
