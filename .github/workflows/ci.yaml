@@ -28,6 +28,10 @@ jobs:
           role-to-assume: arn:aws:iam::724772086697:role/GitHubActionsECRRole
           aws-region: us-east-1
 
+      - name: Login to Amazon ECR
+        run: aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 724772086697.dkr.ecr.us-east-1.amazonaws.com
+        working-directory: .
+
       - name: Initialize Terraform
         run: terraform init -upgrade -reconfigure
         working-directory: terraform
