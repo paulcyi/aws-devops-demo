@@ -65,7 +65,6 @@ def index():
             return "Application experiencing database connectivity issues. Please try again later.", 500
     try:
         logger.info("Updating DynamoDB hit counter")
-        time.sleep(1)
         response = table.update_item(
             Key={'id': 'hit_counter'},
             UpdateExpression="SET hit_count = if_not_exists(hit_count, :start) + :inc",
