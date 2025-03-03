@@ -25,7 +25,7 @@ variable "ecs_task_family" {
 variable "image_tag" {
   description = "The tag for the Docker image in ECR (e.g., latest or a Git SHA)"
   type        = string
-  default     = "latest"
+  default     = "v1.0"
   validation {
     condition     = length(var.image_tag) > 0 && length(var.image_tag) <= 128
     error_message = "The image_tag must be a non-empty string up to 128 characters."
