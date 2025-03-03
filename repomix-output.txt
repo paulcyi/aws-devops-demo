@@ -52,14 +52,11 @@ app/
   main.py
   requirements.txt
 terraform/
-  .terraform/
-    terraform.tfstate
-  .terraform.lock.hcl
   main.tf
-  terraform.tfstate.backup
   variables.tf
 .gitignore
 Dockerfile
+LICENSE
 README.md
 
 ================================================================
@@ -69,103 +66,169 @@ Files
 ================
 File: .github/workflows/ci.yaml
 ================
-name: CI Build, Test, Push to ECR, and Deploy Terraform
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   pull_request:
 
+env:
+  ENVIRONMENT: production
+
 jobs:
-  build-test-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Log in to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
-          docker login --username AWS --password-stdin 724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          role-to-assume: arn:aws:iam::724772086697:role/GitHubActionsECRRole
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        run: aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 724772086697.dkr.ecr.us-east-1.amazonaws.com
+        working-directory: .
+
+      - name: Initialize Terraform
+        run: terraform init -upgrade -reconfigure
+        working-directory: terraform
 
       - name: Build Docker image
         run: |
-          docker build --no-cache -t aws-devops-demo .
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          docker build --no-cache -t aws-devops-demo -f Dockerfile .
+          docker run --rm aws-devops-demo bash -c "pip list" > pip_list.txt
+          cat pip_list.txt
+          if ! grep -i "requests" pip_list.txt; then
+            echo "Error: requests module not found in image"
+            exit 1
+          fi
+          if ! grep -i "boto3" pip_list.txt; then
+            echo "Error: boto3 module not found in image"
+            exit 1
+          fi
+          rm pip_list.txt
+        working-directory: .
 
       - name: Tag and push Docker image to ECR
         run: |
-          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)  # Short Git commit hash
+          IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           ECR_URI=724772086697.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/aws-devops-demo
-
-          # Tag the image with the commit hash
           docker tag aws-devops-demo:latest $ECR_URI:$IMAGE_TAG
-
-          # Also explicitly tag it as "latest"
           docker tag aws-devops-demo:latest $ECR_URI:latest
-
-          # Push both tags to ECR
           docker push $ECR_URI:$IMAGE_TAG
           docker push $ECR_URI:latest
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: "1.5.7"
-
-      - name: Initialize Terraform
-        run: |
-          cd terraform
-          terraform init
-
-      - name: Run Terraform Plan
-        run: |
-          cd terraform
-          terraform plan
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-
-      - name: Apply Terraform (Only on main branch)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          cd terraform
-          terraform apply -auto-approve
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+      - name: Apply Terraform
+        run: terraform apply -auto-approve
+        working-directory: terraform
 
 ================
 File: app/main.py
 ================
 from flask import Flask
+import boto3
+import os
+import logging
+import time
+from botocore.exceptions import ClientError
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+
+def get_dynamodb():
+    max_retries = 15
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempt {attempt+1}/{max_retries} to connect to DynamoDB")
+            # Use default IMDSv2 handling without imds_client_config
+            dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+            # Test connection
+            dynamodb.meta.client.list_tables()
+            logger.info("DynamoDB connection successful")
+            return dynamodb
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', '')
+            error_msg = e.response.get('Error', {}).get('Message', str(e))
+            logger.error(f"DynamoDB client error: {error_code} - {error_msg}")
+            if error_code in ['AccessDenied', 'UnauthorizedOperation']:
+                logger.error("Permissions issue detected")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached for DynamoDB connection")
+                raise
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to DynamoDB: {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached for DynamoDB connection")
+                raise
+
+try:
+    dynamodb = get_dynamodb()
+    table = dynamodb.Table('DemoHits')
+    logger.info("DynamoDB connection initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize DynamoDB: {str(e)}")
+    dynamodb = None
+    table = None
 
 @app.route("/")
 def index():
-    return "Welcome to my AWS DevOps Demo!"
+    global dynamodb, table
+    if table is None:
+        try:
+            logger.info("Attempting to reinitialize DynamoDB connection")
+            dynamodb = get_dynamodb()
+            table = dynamodb.Table('DemoHits')
+            logger.info("DynamoDB connection reinitialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to reinitialize DynamoDB: {str(e)}")
+            return "Application experiencing database connectivity issues. Please try again later.", 500
+    try:
+        logger.info("Updating DynamoDB hit counter")
+        # Increment hit counter in DynamoDB
+        response = table.update_item(
+            Key={'id': 'hit_counter'},
+            UpdateExpression="SET hit_count = if_not_exists(hit_count, :start) + :inc",
+            ExpressionAttributeValues={':start': 0, ':inc': 1},
+            ReturnValues="UPDATED_NEW"
+        )   # Atomic increment with default value
+        count = response['Attributes']['hit_count']
+        logger.info(f"Successfully updated counter to {count}")
+        return f"Welcome to my AWS DevOps Demo! Page Hits: {int(count)}"
+    except Exception as e:
+        logger.error(f"Error updating hit counter: {str(e)}")
+        return "Application experiencing database connectivity issues. Please try again later.", 500
+
+@app.route("/health")
+def health():
+    logger.info("Health check passed")
+    return "OK", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001)
@@ -173,1246 +236,196 @@ if __name__ == "__main__":
 ================
 File: app/requirements.txt
 ================
-Flask==2.0.3
-Werkzeug==2.0.3
-
-================
-File: terraform/.terraform/terraform.tfstate
-================
-{
-  "version": 3,
-  "terraform_version": "1.9.8",
-  "backend": {
-    "type": "s3",
-    "config": {
-      "access_key": null,
-      "acl": null,
-      "allowed_account_ids": null,
-      "assume_role": null,
-      "assume_role_duration_seconds": null,
-      "assume_role_policy": null,
-      "assume_role_policy_arns": null,
-      "assume_role_tags": null,
-      "assume_role_transitive_tag_keys": null,
-      "assume_role_with_web_identity": null,
-      "bucket": "aws-devops-demo-terraform-state",
-      "custom_ca_bundle": null,
-      "dynamodb_endpoint": null,
-      "dynamodb_table": null,
-      "ec2_metadata_service_endpoint": null,
-      "ec2_metadata_service_endpoint_mode": null,
-      "encrypt": true,
-      "endpoint": null,
-      "endpoints": null,
-      "external_id": null,
-      "forbidden_account_ids": null,
-      "force_path_style": null,
-      "http_proxy": null,
-      "https_proxy": null,
-      "iam_endpoint": null,
-      "insecure": null,
-      "key": "aws-devops-demo/terraform.tfstate",
-      "kms_key_id": null,
-      "max_retries": null,
-      "no_proxy": null,
-      "profile": null,
-      "region": "us-east-1",
-      "retry_mode": null,
-      "role_arn": null,
-      "secret_key": null,
-      "session_name": null,
-      "shared_config_files": null,
-      "shared_credentials_file": null,
-      "shared_credentials_files": null,
-      "skip_credentials_validation": null,
-      "skip_metadata_api_check": null,
-      "skip_region_validation": null,
-      "skip_requesting_account_id": null,
-      "skip_s3_checksum": null,
-      "sse_customer_key": null,
-      "sts_endpoint": null,
-      "sts_region": null,
-      "token": null,
-      "use_dualstack_endpoint": null,
-      "use_fips_endpoint": null,
-      "use_path_style": null,
-      "workspace_key_prefix": null
-    },
-    "hash": 4027164209
-  }
-}
-
-================
-File: terraform/.terraform.lock.hcl
-================
-# This file is maintained automatically by "terraform init".
-# Manual edits may be lost in future updates.
-
-provider "registry.terraform.io/hashicorp/aws" {
-  version     = "4.67.0"
-  constraints = "~> 4.0"
-  hashes = [
-    "h1:P43vwcDPG99x5WBbmqwUPgfJrfXf6/ucAIbGlRb7k1w=",
-    "zh:0843017ecc24385f2b45f2c5fce79dc25b258e50d516877b3affee3bef34f060",
-    "zh:19876066cfa60de91834ec569a6448dab8c2518b8a71b5ca870b2444febddac6",
-    "zh:24995686b2ad88c1ffaa242e36eee791fc6070e6144f418048c4ce24d0ba5183",
-    "zh:4a002990b9f4d6d225d82cb2fb8805789ffef791999ee5d9cb1fef579aeff8f1",
-    "zh:559a2b5ace06b878c6de3ecf19b94fbae3512562f7a51e930674b16c2f606e29",
-    "zh:6a07da13b86b9753b95d4d8218f6dae874cf34699bca1470d6effbb4dee7f4b7",
-    "zh:768b3bfd126c3b77dc975c7c0e5db3207e4f9997cf41aa3385c63206242ba043",
-    "zh:7be5177e698d4b547083cc738b977742d70ed68487ce6f49ecd0c94dbf9d1362",
-    "zh:8b562a818915fb0d85959257095251a05c76f3467caa3ba95c583ba5fe043f9b",
-    "zh:9b12af85486a96aedd8d7984b0ff811a4b42e3d88dad1a3fb4c0b580d04fa425",
-    "zh:9c385d03a958b54e2afd5279cd8c7cbdd2d6ca5c7d6a333e61092331f38af7cf",
-    "zh:b3ca45f2821a89af417787df8289cb4314b273d29555ad3b2a5ab98bb4816b3b",
-    "zh:da3c317f1db2469615ab40aa6baba63b5643bae7110ff855277a1fb9d8eb4f2c",
-    "zh:dc6430622a8dc5cdab359a8704aec81d3825ea1d305bbb3bbd032b1c6adfae0c",
-    "zh:fac0d2ddeadf9ec53da87922f666e1e73a603a611c57bcbc4b86ac2821619b1d",
-  ]
-}
+Flask>=2.1.0
+Werkzeug>=2.1.0
+boto3>=1.34.0
+requests>=2.31.0,<3.0.0
 
 ================
 File: terraform/main.tf
 ================
-# 🚀 Terraform Configuration
+# Terraform Configuration for AWS DevOps Demo
+# Defines the provider, backend, and resource dependencies for a production-ready ECS deployment
 terraform {
+  # Configure required providers with version constraints
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 4.0"
+      version = "~> 5.0"  # Use latest 5.x series for stability and features
     }
   }
-  required_version = ">= 1.0"
+  # Specify compatible Terraform version
+  required_version = "~> 1.5.7"
 
+  # S3 backend for remote state management
   backend "s3" {
-    bucket = "aws-devops-demo-terraform-state"
-    key = "aws-devops-demo/terraform.tfstate"
-    region = "us-east-1"
-    encrypt = true
+    bucket         = "aws-devops-demo-terraform-state"
+    key            = "aws-devops-demo/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
   }
 }
 
+# AWS Provider Configuration
+# Sets the default region for all AWS resources
 provider "aws" {
   region = var.aws_region
 }
 
-# ✅ Networking: Creates a VPC and public subnets
+# ---------------------------------------------
+# Networking Resources
+# Defines the VPC, subnets, and routing for the application
+
+# VPC for the DevOps Demo
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
+  tags = {
+    Name        = "devops-demo-vpc"
+    Environment = "production"
+  }
 }
 
+# Public Subnets for Load Balancer and ECS
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
   cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
   map_public_ip_on_launch = true
   availability_zone       = element(["us-east-1a", "us-east-1b"], count.index)
+  tags = {
+    Name        = "devops-demo-subnet-public-${count.index}"
+    Environment = "production"
+  }
 }
 
+# Internet Gateway for Public Access
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
+  tags = {
+    Name        = "devops-demo-igw"
+    Environment = "production"
+  }
 }
 
+# Route Table for Public Subnets
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
-
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.gw.id
   }
+  tags = {
+    Name        = "devops-demo-public-rt"
+    Environment = "production"
+  }
 }
 
+# Associate Route Table with Public Subnets
 resource "aws_route_table_association" "public_assoc" {
   count          = length(aws_subnet.public[*].id)
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public_rt.id
 }
 
-# ECR Repository for storing Docker images
+# ---------------------------------------------
+# Storage Resources
+# Manages ECR and DynamoDB for the application
+
+# ECR Repository for Docker Images
 resource "aws_ecr_repository" "devops_demo_repo" {
   name                 = "aws-devops-demo"
   image_tag_mutability = "MUTABLE"
-
   encryption_configuration {
     encryption_type = "AES256"
   }
+  tags = {
+    Name        = "devops-demo-ecr"
+    Environment = "production"
+  }
 }
 
-# ✅ Security: Defines security groups for ALB and ECS
+# DynamoDB Table for Hit Counter
+resource "aws_dynamodb_table" "demo_hits" {
+  name           = "DemoHits"
+  billing_mode   = "PAY_PER_REQUEST"  # Cost-effective for demo
+  hash_key       = "id"
+  attribute {
+    name = "id"
+    type = "S"
+  }
+  tags = {
+    Name        = "devops-demo-hits"
+    Environment = "production"
+  }
+}
+
+# ---------------------------------------------
+# Security Resources
+# Defines security groups and IAM roles for access control
+
+# Security Group for Application Load Balancer
 resource "aws_security_group" "alb_sg" {
   name_prefix = "alb-sg-"
   vpc_id      = aws_vpc.main.id
-
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Allow public HTTP access
+    cidr_blocks = ["0.0.0.0/0"]  # Allow public HTTP access
   }
-
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  tags = {
+    Name        = "devops-demo-alb-sg"
+    Environment = "production"
+  }
 }
 
+# Security Group for ECS Tasks
 resource "aws_security_group" "ecs_sg" {
   name_prefix = "ecs-sg-"
   vpc_id      = aws_vpc.main.id
-
   ingress {
     from_port       = 5001
     to_port         = 5001
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb_sg.id] # Only allow traffic from ALB
+    security_groups = [aws_security_group.alb_sg.id]  # Restrict to ALB traffic
   }
-
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
-
-# ✅ Application Load Balancer: Handles external traffic and routes to ECS
-resource "aws_lb" "ecs_alb" {
-  name               = "devops-demo-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = aws_subnet.public[*].id
-}
-
-resource "aws_lb_target_group" "ecs_target_group" {
-  name        = "devops-demo-tg"
-  port        = 5001
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
-}
-
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.ecs_alb.arn
-  port              = 80
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.ecs_target_group.arn
+  tags = {
+    Name        = "devops-demo-ecs-sg"
+    Environment = "production"
   }
 }
 
-# ✅ IAM Policy to allow GitHub Actions to push to ECR
-resource "aws_iam_policy" "ecr_push_policy" {
-  name        = "GitHubActionsECRPush"
-  description = "Policy to allow GitHub Actions to push to ECR"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload"
-        ]
-        Resource = aws_ecr_repository.devops_demo_repo.arn
-      }
-    ]
-  })
+# IAM OpenID Connect Provider for GitHub Actions
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
 }
 
-# ✅ IAM Role for GitHub Actions
+# IAM Role for GitHub Actions
 resource "aws_iam_role" "github_actions_role" {
   name = "GitHubActionsECRRole"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-# ✅ ECS Cluster & Task Definition: Defines the containerized app and execution role
-resource "aws_ecs_cluster" "devops_demo_cluster" {
-  name = "devops-demo-cluster"
-}
-
-variable "ecs_task_family" {
-  default = "devops-demo-task"
-}
-
-resource "aws_ecs_task_definition" "devops_demo_task" {
-  family                   = var.ecs_task_family
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = "256"
-  memory                   = "512"
-
-  execution_role_arn = aws_iam_role.ecs_task_execution_role.arn
-  container_definitions = jsonencode([
-    {
-      name      = "devops-demo-container"
-      image     = "${aws_ecr_repository.devops_demo_repo.repository_url}:latest"
-      cpu       = 256
-      memory    = 512
-      essential = true
-      portMappings = [
-        {
-          containerPort = 5001
-        }
-      ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group = "/ecs/devops-demo-task"
-          awslogs-region = "us-east-1"
-          awslogs-stream-prefix = "ecs"
-        }
-      }
-    }
-  ])
-}
-
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "ecsTaskExecutionRole"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Service = "ecs-tasks.amazonaws.com"
+        Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
       }
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_policy_attachment" "ecs_task_execution_role_attach" {
-  name       = "ecs-task-execution-role-attach"
-  roles      = [aws_iam_role.ecs_task_execution_role.name]
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-# ✅ ECS Service: Deploys the app and registers with the ALB
-resource "aws_ecs_service" "devops_demo_service" {
-  name            = "devops-demo-service"
-  cluster         = aws_ecs_cluster.devops_demo_cluster.id
-  task_definition = aws_ecs_task_definition.devops_demo_task.arn
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = aws_subnet.public[*].id
-    security_groups  = [aws_security_group.ecs_sg.id]
-    assign_public_ip = true
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.ecs_target_group.arn
-    container_name   = "devops-demo-container"
-    container_port   = 5001
-  }
-
-  desired_count = 1
-
-  depends_on = [aws_lb_listener.http]
-}
-
-resource "aws_cloudwatch_log_group" "ecs_log_group" {
-  name = "/ecs/devops-demo-task"
-  retention_in_days = 7
-}
-
-================
-File: terraform/terraform.tfstate.backup
-================
-{
-  "version": 4,
-  "terraform_version": "1.9.8",
-  "serial": 26,
-  "lineage": "5cd49f5c-4bda-88c1-c7dd-14de28f05645",
-  "outputs": {},
-  "resources": [
-    {
-      "mode": "managed",
-      "type": "aws_ecr_repository",
-      "name": "devops_demo_repo",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:ecr:us-east-1:724772086697:repository/aws-devops-demo",
-            "encryption_configuration": [
-              {
-                "encryption_type": "AES256",
-                "kms_key": ""
-              }
-            ],
-            "force_delete": null,
-            "id": "aws-devops-demo",
-            "image_scanning_configuration": [
-              {
-                "scan_on_push": false
-              }
-            ],
-            "image_tag_mutability": "MUTABLE",
-            "name": "aws-devops-demo",
-            "registry_id": "724772086697",
-            "repository_url": "724772086697.dkr.ecr.us-east-1.amazonaws.com/aws-devops-demo",
-            "tags": {},
-            "tags_all": {},
-            "timeouts": null
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiZGVsZXRlIjoxMjAwMDAwMDAwMDAwfX0="
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_ecs_cluster",
-      "name": "devops_demo_cluster",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:ecs:us-east-1:724772086697:cluster/devops-demo-cluster",
-            "capacity_providers": [],
-            "configuration": [],
-            "default_capacity_provider_strategy": [],
-            "id": "arn:aws:ecs:us-east-1:724772086697:cluster/devops-demo-cluster",
-            "name": "devops-demo-cluster",
-            "service_connect_defaults": [],
-            "setting": [
-              {
-                "name": "containerInsights",
-                "value": "disabled"
-              }
-            ],
-            "tags": {},
-            "tags_all": {}
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA=="
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_ecs_service",
-      "name": "devops_demo_service",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "alarms": [],
-            "capacity_provider_strategy": [],
-            "cluster": "arn:aws:ecs:us-east-1:724772086697:cluster/devops-demo-cluster",
-            "deployment_circuit_breaker": [
-              {
-                "enable": false,
-                "rollback": false
-              }
-            ],
-            "deployment_controller": [
-              {
-                "type": "ECS"
-              }
-            ],
-            "deployment_maximum_percent": 200,
-            "deployment_minimum_healthy_percent": 100,
-            "desired_count": 1,
-            "enable_ecs_managed_tags": false,
-            "enable_execute_command": false,
-            "force_new_deployment": null,
-            "health_check_grace_period_seconds": 0,
-            "iam_role": "/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS",
-            "id": "arn:aws:ecs:us-east-1:724772086697:service/devops-demo-cluster/devops-demo-service",
-            "launch_type": "FARGATE",
-            "load_balancer": [
-              {
-                "container_name": "devops-demo-container",
-                "container_port": 5001,
-                "elb_name": "",
-                "target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:targetgroup/devops-demo-tg/3b7b8a767d1de24d"
-              }
-            ],
-            "name": "devops-demo-service",
-            "network_configuration": [
-              {
-                "assign_public_ip": true,
-                "security_groups": [
-                  "sg-064eb25f2e312142e"
-                ],
-                "subnets": [
-                  "subnet-03f977fb9edbe8e9f",
-                  "subnet-04209bfacadd99c4b"
-                ]
-              }
-            ],
-            "ordered_placement_strategy": [],
-            "placement_constraints": [],
-            "platform_version": "LATEST",
-            "propagate_tags": "NONE",
-            "scheduling_strategy": "REPLICA",
-            "service_connect_configuration": [],
-            "service_registries": [],
-            "tags": null,
-            "tags_all": {},
-            "task_definition": "arn:aws:ecs:us-east-1:724772086697:task-definition/devops-demo-task:1",
-            "timeouts": null,
-            "triggers": {},
-            "wait_for_steady_state": false
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_ecr_repository.devops_demo_repo",
-            "aws_ecs_cluster.devops_demo_cluster",
-            "aws_ecs_task_definition.devops_demo_task",
-            "aws_iam_role.ecs_task_execution_role",
-            "aws_lb.ecs_alb",
-            "aws_lb_listener.http",
-            "aws_lb_target_group.ecs_target_group",
-            "aws_security_group.alb_sg",
-            "aws_security_group.ecs_sg",
-            "aws_subnet.public",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_ecs_task_definition",
-      "name": "devops_demo_task",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ecs:us-east-1:724772086697:task-definition/devops-demo-task:1",
-            "arn_without_revision": "arn:aws:ecs:us-east-1:724772086697:task-definition/devops-demo-task",
-            "container_definitions": "[{\"cpu\":256,\"environment\":[],\"essential\":true,\"image\":\"724772086697.dkr.ecr.us-east-1.amazonaws.com/aws-devops-demo:latest\",\"memory\":512,\"mountPoints\":[],\"name\":\"devops-demo-container\",\"portMappings\":[{\"containerPort\":5001,\"hostPort\":5001,\"protocol\":\"tcp\"}],\"systemControls\":[],\"volumesFrom\":[]}]",
-            "cpu": "256",
-            "ephemeral_storage": [],
-            "execution_role_arn": "arn:aws:iam::724772086697:role/ecsTaskExecutionRole",
-            "family": "devops-demo-task",
-            "id": "devops-demo-task",
-            "inference_accelerator": [],
-            "ipc_mode": "",
-            "memory": "512",
-            "network_mode": "awsvpc",
-            "pid_mode": "",
-            "placement_constraints": [],
-            "proxy_configuration": [],
-            "requires_compatibilities": [
-              "FARGATE"
-            ],
-            "revision": 1,
-            "runtime_platform": [],
-            "skip_destroy": false,
-            "tags": {},
-            "tags_all": {},
-            "task_role_arn": "",
-            "volume": []
-          },
-          "sensitive_attributes": [],
-          "private": "eyJzY2hlbWFfdmVyc2lvbiI6IjEifQ==",
-          "dependencies": [
-            "aws_ecr_repository.devops_demo_repo",
-            "aws_iam_role.ecs_task_execution_role"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_iam_policy",
-      "name": "ecr_push_policy",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:iam::724772086697:policy/GitHubActionsECRPush",
-            "description": "Policy to allow GitHub Actions to push to ECR",
-            "id": "arn:aws:iam::724772086697:policy/GitHubActionsECRPush",
-            "name": "GitHubActionsECRPush",
-            "name_prefix": "",
-            "path": "/",
-            "policy": "{\"Statement\":[{\"Action\":[\"ecr:GetAuthorizationToken\",\"ecr:BatchCheckLayerAvailability\",\"ecr:PutImage\",\"ecr:InitiateLayerUpload\",\"ecr:UploadLayerPart\",\"ecr:CompleteLayerUpload\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:ecr:us-east-1:724772086697:repository/aws-devops-demo\"}],\"Version\":\"2012-10-17\"}",
-            "policy_id": "ANPA2RP6IMOUVQUHSMU7Z",
-            "tags": {},
-            "tags_all": {}
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA==",
-          "dependencies": [
-            "aws_ecr_repository.devops_demo_repo"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_iam_policy_attachment",
-      "name": "ecs_task_execution_role_attach",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "groups": [],
-            "id": "ecs-task-execution-role-attach",
-            "name": "ecs-task-execution-role-attach",
-            "policy_arn": "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
-            "roles": [
-              "ecsTaskExecutionRole"
-            ],
-            "users": []
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA==",
-          "dependencies": [
-            "aws_iam_role.ecs_task_execution_role"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_iam_role",
-      "name": "ecs_task_execution_role",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:iam::724772086697:role/ecsTaskExecutionRole",
-            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ecs-tasks.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
-            "create_date": "2025-02-20T09:11:31Z",
-            "description": "",
-            "force_detach_policies": false,
-            "id": "ecsTaskExecutionRole",
-            "inline_policy": [],
-            "managed_policy_arns": [
-              "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-            ],
-            "max_session_duration": 3600,
-            "name": "ecsTaskExecutionRole",
-            "name_prefix": "",
-            "path": "/",
-            "permissions_boundary": null,
-            "role_last_used": [
-              {
-                "last_used_date": "",
-                "region": ""
-              }
-            ],
-            "tags": {},
-            "tags_all": {},
-            "unique_id": "AROA2RP6IMOUWFKE2PU33"
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA=="
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_iam_role",
-      "name": "github_actions_role",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:iam::724772086697:role/GitHubActionsECRRole",
-            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
-            "create_date": "2025-02-20T08:38:32Z",
-            "description": "",
-            "force_detach_policies": false,
-            "id": "GitHubActionsECRRole",
-            "inline_policy": [],
-            "managed_policy_arns": [],
-            "max_session_duration": 3600,
-            "name": "GitHubActionsECRRole",
-            "name_prefix": "",
-            "path": "/",
-            "permissions_boundary": null,
-            "role_last_used": [
-              {
-                "last_used_date": "",
-                "region": ""
-              }
-            ],
-            "tags": {},
-            "tags_all": {},
-            "unique_id": "AROA2RP6IMOUQX4CFR5SG"
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA=="
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_internet_gateway",
-      "name": "gw",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:internet-gateway/igw-073408a1e7d5229d3",
-            "id": "igw-073408a1e7d5229d3",
-            "owner_id": "724772086697",
-            "tags": null,
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_lb",
-      "name": "ecs_alb",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "access_logs": [
-              {
-                "bucket": "",
-                "enabled": false,
-                "prefix": ""
-              }
-            ],
-            "arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:loadbalancer/app/devops-demo-alb/35befe7e2aa2e84f",
-            "arn_suffix": "app/devops-demo-alb/35befe7e2aa2e84f",
-            "customer_owned_ipv4_pool": "",
-            "desync_mitigation_mode": "defensive",
-            "dns_name": "devops-demo-alb-426352306.us-east-1.elb.amazonaws.com",
-            "drop_invalid_header_fields": false,
-            "enable_cross_zone_load_balancing": true,
-            "enable_deletion_protection": false,
-            "enable_http2": true,
-            "enable_tls_version_and_cipher_suite_headers": false,
-            "enable_waf_fail_open": false,
-            "enable_xff_client_port": false,
-            "id": "arn:aws:elasticloadbalancing:us-east-1:724772086697:loadbalancer/app/devops-demo-alb/35befe7e2aa2e84f",
-            "idle_timeout": 60,
-            "internal": false,
-            "ip_address_type": "ipv4",
-            "load_balancer_type": "application",
-            "name": "devops-demo-alb",
-            "name_prefix": null,
-            "preserve_host_header": false,
-            "security_groups": [
-              "sg-0b2b34eb91a9f2c01"
-            ],
-            "subnet_mapping": [
-              {
-                "allocation_id": "",
-                "ipv6_address": "",
-                "outpost_id": "",
-                "private_ipv4_address": "",
-                "subnet_id": "subnet-03f977fb9edbe8e9f"
-              },
-              {
-                "allocation_id": "",
-                "ipv6_address": "",
-                "outpost_id": "",
-                "private_ipv4_address": "",
-                "subnet_id": "subnet-04209bfacadd99c4b"
-              }
-            ],
-            "subnets": [
-              "subnet-03f977fb9edbe8e9f",
-              "subnet-04209bfacadd99c4b"
-            ],
-            "tags": null,
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b",
-            "xff_header_processing_mode": "append",
-            "zone_id": "Z35SXDOTRQ7X7K"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6NjAwMDAwMDAwMDAwLCJ1cGRhdGUiOjYwMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_security_group.alb_sg",
-            "aws_subnet.public",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_lb_listener",
-      "name": "http",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "alpn_policy": null,
-            "arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:listener/app/devops-demo-alb/35befe7e2aa2e84f/ab5181242605b63d",
-            "certificate_arn": null,
-            "default_action": [
-              {
-                "authenticate_cognito": [],
-                "authenticate_oidc": [],
-                "fixed_response": [],
-                "forward": [],
-                "order": 1,
-                "redirect": [],
-                "target_group_arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:targetgroup/devops-demo-tg/3b7b8a767d1de24d",
-                "type": "forward"
-              }
-            ],
-            "id": "arn:aws:elasticloadbalancing:us-east-1:724772086697:listener/app/devops-demo-alb/35befe7e2aa2e84f/ab5181242605b63d",
-            "load_balancer_arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:loadbalancer/app/devops-demo-alb/35befe7e2aa2e84f",
-            "port": 80,
-            "protocol": "HTTP",
-            "ssl_policy": "",
-            "tags": null,
-            "tags_all": {},
-            "timeouts": null
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsicmVhZCI6NjAwMDAwMDAwMDAwfX0=",
-          "dependencies": [
-            "aws_lb.ecs_alb",
-            "aws_lb_target_group.ecs_target_group",
-            "aws_security_group.alb_sg",
-            "aws_subnet.public",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_lb_target_group",
-      "name": "ecs_target_group",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:elasticloadbalancing:us-east-1:724772086697:targetgroup/devops-demo-tg/3b7b8a767d1de24d",
-            "arn_suffix": "targetgroup/devops-demo-tg/3b7b8a767d1de24d",
-            "connection_termination": false,
-            "deregistration_delay": "300",
-            "health_check": [
-              {
-                "enabled": true,
-                "healthy_threshold": 5,
-                "interval": 30,
-                "matcher": "200",
-                "path": "/",
-                "port": "traffic-port",
-                "protocol": "HTTP",
-                "timeout": 5,
-                "unhealthy_threshold": 2
-              }
-            ],
-            "id": "arn:aws:elasticloadbalancing:us-east-1:724772086697:targetgroup/devops-demo-tg/3b7b8a767d1de24d",
-            "ip_address_type": "ipv4",
-            "lambda_multi_value_headers_enabled": false,
-            "load_balancing_algorithm_type": "round_robin",
-            "load_balancing_cross_zone_enabled": "use_load_balancer_configuration",
-            "name": "devops-demo-tg",
-            "name_prefix": null,
-            "port": 5001,
-            "preserve_client_ip": null,
-            "protocol": "HTTP",
-            "protocol_version": "HTTP1",
-            "proxy_protocol_v2": false,
-            "slow_start": 0,
-            "stickiness": [
-              {
-                "cookie_duration": 86400,
-                "cookie_name": "",
-                "enabled": false,
-                "type": "lb_cookie"
-              }
-            ],
-            "tags": {},
-            "tags_all": {},
-            "target_failover": [
-              {
-                "on_deregistration": null,
-                "on_unhealthy": null
-              }
-            ],
-            "target_type": "ip",
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "bnVsbA==",
-          "dependencies": [
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_route_table",
-      "name": "public_rt",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 0,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:route-table/rtb-0c0e73966f0893025",
-            "id": "rtb-0c0e73966f0893025",
-            "owner_id": "724772086697",
-            "propagating_vgws": [],
-            "route": [
-              {
-                "carrier_gateway_id": "",
-                "cidr_block": "0.0.0.0/0",
-                "core_network_arn": "",
-                "destination_prefix_list_id": "",
-                "egress_only_gateway_id": "",
-                "gateway_id": "igw-073408a1e7d5229d3",
-                "instance_id": "",
-                "ipv6_cidr_block": "",
-                "local_gateway_id": "",
-                "nat_gateway_id": "",
-                "network_interface_id": "",
-                "transit_gateway_id": "",
-                "vpc_endpoint_id": "",
-                "vpc_peering_connection_id": ""
-              }
-            ],
-            "tags": null,
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_internet_gateway.gw",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_route_table_association",
-      "name": "public_assoc",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "index_key": 0,
-          "schema_version": 0,
-          "attributes": {
-            "gateway_id": "",
-            "id": "rtbassoc-09da873d86a905beb",
-            "route_table_id": "rtb-0c0e73966f0893025",
-            "subnet_id": "subnet-04209bfacadd99c4b",
-            "timeouts": null
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_internet_gateway.gw",
-            "aws_route_table.public_rt",
-            "aws_subnet.public",
-            "aws_vpc.main"
-          ]
-        },
-        {
-          "index_key": 1,
-          "schema_version": 0,
-          "attributes": {
-            "gateway_id": "",
-            "id": "rtbassoc-0784e0cc303edba97",
-            "route_table_id": "rtb-0c0e73966f0893025",
-            "subnet_id": "subnet-03f977fb9edbe8e9f",
-            "timeouts": null
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
-          "dependencies": [
-            "aws_internet_gateway.gw",
-            "aws_route_table.public_rt",
-            "aws_subnet.public",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_security_group",
-      "name": "alb_sg",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:security-group/sg-0b2b34eb91a9f2c01",
-            "description": "Managed by Terraform",
-            "egress": [
-              {
-                "cidr_blocks": [
-                  "0.0.0.0/0"
-                ],
-                "description": "",
-                "from_port": 0,
-                "ipv6_cidr_blocks": [],
-                "prefix_list_ids": [],
-                "protocol": "-1",
-                "security_groups": [],
-                "self": false,
-                "to_port": 0
-              }
-            ],
-            "id": "sg-0b2b34eb91a9f2c01",
-            "ingress": [
-              {
-                "cidr_blocks": [
-                  "0.0.0.0/0"
-                ],
-                "description": "",
-                "from_port": 80,
-                "ipv6_cidr_blocks": [],
-                "prefix_list_ids": [],
-                "protocol": "tcp",
-                "security_groups": [],
-                "self": false,
-                "to_port": 80
-              }
-            ],
-            "name": "alb-sg-20250220091132278400000001",
-            "name_prefix": "alb-sg-",
-            "owner_id": "724772086697",
-            "revoke_rules_on_delete": false,
-            "tags": {},
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6OTAwMDAwMDAwMDAwfSwic2NoZW1hX3ZlcnNpb24iOiIxIn0=",
-          "dependencies": [
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_security_group",
-      "name": "ecs_sg",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:security-group/sg-064eb25f2e312142e",
-            "description": "Managed by Terraform",
-            "egress": [
-              {
-                "cidr_blocks": [
-                  "0.0.0.0/0"
-                ],
-                "description": "",
-                "from_port": 0,
-                "ipv6_cidr_blocks": [],
-                "prefix_list_ids": [],
-                "protocol": "-1",
-                "security_groups": [],
-                "self": false,
-                "to_port": 0
-              }
-            ],
-            "id": "sg-064eb25f2e312142e",
-            "ingress": [
-              {
-                "cidr_blocks": [],
-                "description": "",
-                "from_port": 5001,
-                "ipv6_cidr_blocks": [],
-                "prefix_list_ids": [],
-                "protocol": "tcp",
-                "security_groups": [
-                  "sg-0b2b34eb91a9f2c01"
-                ],
-                "self": false,
-                "to_port": 5001
-              }
-            ],
-            "name": "ecs-sg-20250220091134684100000002",
-            "name_prefix": "ecs-sg-",
-            "owner_id": "724772086697",
-            "revoke_rules_on_delete": false,
-            "tags": {},
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6OTAwMDAwMDAwMDAwfSwic2NoZW1hX3ZlcnNpb24iOiIxIn0=",
-          "dependencies": [
-            "aws_security_group.alb_sg",
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_subnet",
-      "name": "public",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "index_key": 0,
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:subnet/subnet-04209bfacadd99c4b",
-            "assign_ipv6_address_on_creation": false,
-            "availability_zone": "us-east-1a",
-            "availability_zone_id": "use1-az6",
-            "cidr_block": "10.0.0.0/24",
-            "customer_owned_ipv4_pool": "",
-            "enable_dns64": false,
-            "enable_lni_at_device_index": 0,
-            "enable_resource_name_dns_a_record_on_launch": false,
-            "enable_resource_name_dns_aaaa_record_on_launch": false,
-            "id": "subnet-04209bfacadd99c4b",
-            "ipv6_cidr_block": "",
-            "ipv6_cidr_block_association_id": "",
-            "ipv6_native": false,
-            "map_customer_owned_ip_on_launch": false,
-            "map_public_ip_on_launch": true,
-            "outpost_arn": "",
-            "owner_id": "724772086697",
-            "private_dns_hostname_type_on_launch": "ip-name",
-            "tags": {},
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMSJ9",
-          "dependencies": [
-            "aws_vpc.main"
-          ]
-        },
-        {
-          "index_key": 1,
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:subnet/subnet-03f977fb9edbe8e9f",
-            "assign_ipv6_address_on_creation": false,
-            "availability_zone": "us-east-1b",
-            "availability_zone_id": "use1-az1",
-            "cidr_block": "10.0.1.0/24",
-            "customer_owned_ipv4_pool": "",
-            "enable_dns64": false,
-            "enable_lni_at_device_index": 0,
-            "enable_resource_name_dns_a_record_on_launch": false,
-            "enable_resource_name_dns_aaaa_record_on_launch": false,
-            "id": "subnet-03f977fb9edbe8e9f",
-            "ipv6_cidr_block": "",
-            "ipv6_cidr_block_association_id": "",
-            "ipv6_native": false,
-            "map_customer_owned_ip_on_launch": false,
-            "map_public_ip_on_launch": true,
-            "outpost_arn": "",
-            "owner_id": "724772086697",
-            "private_dns_hostname_type_on_launch": "ip-name",
-            "tags": {},
-            "tags_all": {},
-            "timeouts": null,
-            "vpc_id": "vpc-0e9eeda5f3ea8369b"
-          },
-          "sensitive_attributes": [],
-          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMSJ9",
-          "dependencies": [
-            "aws_vpc.main"
-          ]
-        }
-      ]
-    },
-    {
-      "mode": "managed",
-      "type": "aws_vpc",
-      "name": "main",
-      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
-      "instances": [
-        {
-          "schema_version": 1,
-          "attributes": {
-            "arn": "arn:aws:ec2:us-east-1:724772086697:vpc/vpc-0e9eeda5f3ea8369b",
-            "assign_generated_ipv6_cidr_block": false,
-            "cidr_block": "10.0.0.0/16",
-            "default_network_acl_id": "acl-01e455ecf9f6a3746",
-            "default_route_table_id": "rtb-0086241a5bf5bef8b",
-            "default_security_group_id": "sg-08b1477d0ace16af7",
-            "dhcp_options_id": "dopt-04cf859ae6ab4bdc8",
-            "enable_classiclink": false,
-            "enable_classiclink_dns_support": false,
-            "enable_dns_hostnames": false,
-            "enable_dns_support": true,
-            "enable_network_address_usage_metrics": false,
-            "id": "vpc-0e9eeda5f3ea8369b",
-            "instance_tenancy": "default",
-            "ipv4_ipam_pool_id": null,
-            "ipv4_netmask_length": null,
-            "ipv6_association_id": "",
-            "ipv6_cidr_block": "",
-            "ipv6_cidr_block_network_border_group": "",
-            "ipv6_ipam_pool_id": "",
-            "ipv6_netmask_length": 0,
-            "main_route_table_id": "rtb-0086241a5bf5bef8b",
-            "owner_id": "724772086697",
-            "tags": {},
-            "tags_all": {}
-          },
-          "sensitive_attributes": [],
-          "private": "eyJzY2hlbWFfdmVyc2lvbiI6IjEifQ=="
-        }
-      ]
-    }
-  ],
-  "check_results": null
-}
 
 ================
 File: terraform/variables.tf
@@ -1422,10 +435,24 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
+variable "ecs_task_family" {
+  type    = string
+  default = "devops-demo-task"
+}
+
+variable "image_tag" {
+  type    = string
+  default = "latest"
+}
+
 ================
 File: .gitignore
 ================
 venv/
+.terraform/
+.terraform.lock.hcl
+.terraform/
+terraform.tfstate*
 
 ================
 File: Dockerfile
@@ -1435,6 +462,11 @@ FROM python:3.9-slim
 
 # Set working directory
 WORKDIR /app
+
+# Install system dependencies (optional, for future-proofing)
+RUN apt-get update && apt-get install -y \
+  gcc \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first so Docker can cache this layer
 COPY app/requirements.txt /app/
@@ -1450,20 +482,120 @@ EXPOSE 5001
 CMD ["python", "main.py"]
 
 ================
+File: LICENSE
+================
+MIT License
+
+Copyright (c) 2025 Paul Yi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================
 File: README.md
 ================
 # AWS DevOps Demo
 
-This is a small demo project to showcase an end-to-end DevOps workflow on AWS using:
-- A minimal Flask (or Node.js) application
-- Docker for containerization
-- Terraform for Infrastructure as Code
-- GitHub Actions for CI/CD
+![CI Workflow](https://github.com/paulcyi/aws-devops-demo/actions/workflows/ci.yaml/badge.svg?branch=main&event=push)
+![Build](https://img.shields.io/badge/Build-Passing-green)  
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## Planned Features
-- Deploy a single container to AWS ECS (Fargate)
-- Integrate with DynamoDB (optional) for simple data storage
-- Automated builds and deployments on push/merge to `main`
+Welcome to the AWS DevOps Demo! This project showcases a scalable web application hosted on AWS Elastic Container Service (ECS) using Fargate, featuring a live DynamoDB-based hit counter. It demonstrates CI/CD with GitHub Actions, Docker containerization, and Terraform for infrastructure as code (IaC). Built as my first DevOps GitHub makeover project, it highlights my skills in cloud infrastructure, automation, and problem-solving.
+
+## Live Counter
+Check out the live hit counter in action:  
+[View Live Counter](http://devops-demo-alb-426352306.us-east-1.elb.amazonaws.com/)  
+
+
+![Counter Screenshot](counter_screenshot.png)  
+
+
+## Project Overview
+This project is a hands-on implementation of a DevOps workflow, leveraging AWS services to deploy a Python Flask application. The hit counter increments with each page visit, stored in Amazon DynamoDB, and served via an Application Load Balancer (ALB) on ECS with Fargate. The infrastructure is defined using Terraform, with automated builds and deployments managed by GitHub Actions. Key challenges overcome include backend state drift, IAM policy scoping, and container dependency management.
+
+## Technologies Used
+- **Languages/Frameworks**: Python (Flask), Docker
+- **Cloud Services**: AWS (ECS, Fargate, ALB, DynamoDB, IAM, S3, CloudWatch, ECR)
+- **Infrastructure as Code**: Terraform
+- **CI/CD**: GitHub Actions
+- **Skills Demonstrated**: CI/CD pipelines, container orchestration, IaC, cloud security, troubleshooting (e.g., fixing S3 backend issues, IAM permissions).
+
+## Installation and Usage
+### Local Setup
+1. **Create a Virtual Environment**:
+   ```bash
+   python3 -m venv venv
+
+2. **Activate the Virtual Environment**:
+- macOS/Linux: `source venv/bin/activate`
+- Windows: `venv\Scripts\activate`
+
+3. **Install Dependencies**:
+   ```bash
+   pip install -r app/requirements.txt
+
+4. **Build and Run Docker Locally:**
+   ```bash
+   docker build -t aws-devops-demo -f Dockerfile .
+   docker run -p 5001:5001 aws-devops-demo
+
+5. **Access the Counter**:
+- Open `http:localhost:5001` in your browser.
+
+
+### Prerequisites
+- AWS CLI configured with appropriate credentials.
+- Docker installed locally.
+- Terraform installed (version 1.5.7 recommended).
+
+## Architecture Diagram
+```mermaid
+graph TD
+    A[GitHub Actions] --> B[ECR]
+    B --> C[ECS Fargate]
+    C --> D[DynamoDB]
+    E[ALB] --> C
+    F[User] --> E
+    G[CloudWatch] --> C
+    H[SNS Alerts] --> G
+```
+
+*(This Mermaid diagram shows the flow: GitHub Actions builds and pushes to ECR, ECS runs the container with DynamoDB, ALB routes traffic, and CloudWatch/SNS monitor.)*
+
+
+## Contributing
+
+Feel free to submit pull requests or issues! Please follow these guidelines:
+
+- Fork the repository.
+- Create a feature branch (`git checkout -b feature/new-feature`).
+- Commit changes (`git commit -m 'Add new feature'`).
+- Push and open a pull request.
+
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+
+## Acknowledgements
+- Thanks to the xAI Grok team for guidance in building this project.
+- Inspired by AWS DevOps best practices and community resources.
 
 
 
