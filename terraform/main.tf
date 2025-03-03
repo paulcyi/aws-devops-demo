@@ -356,8 +356,7 @@ resource "aws_iam_policy" "ecs_dynamodb_access" {
         "dynamodb:UpdateItem",
         "dynamodb:GetItem",
         "dynamodb:PutItem",
-        "dynamodb:DescribeTable",
-        "dynamodb:ListTables"
+        "dynamodb:DescribeTable"
       ]
       Resource = aws_dynamodb_table.demo_hits.arn
     }]
