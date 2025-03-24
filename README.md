@@ -21,7 +21,6 @@ Welcome to the AWS DevOps Demo! This project showcases a scalable web applicatio
 ## Live Counter
 Check out the live hit counter in action:
 [View Live Counter](http://devops-demo-alb-426352306.us-east-1.elb.amazonaws.com/)
-*(Note: URL may vary based on your AWS environment—update accordingly.)*
 
 ![Counter Screenshot](counter_screenshot.png)
 
@@ -97,7 +96,6 @@ Feel free to submit pull requests or issues! Please follow these guidelines:
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgements
-- Thanks to the xAI Grok team for guidance in building this project.
 - Inspired by AWS DevOps best practices and community resources.
 
 <!-- Final v1.0 release marker -->
