@@ -1,3 +1,10 @@
+![status: archived](https://img.shields.io/badge/status-archived-lightgrey.svg)
+
+> **⚠️ ARCHIVED – superseded by newer AI projects**  
+> This repo is frozen as of **2025-05-26**. I’m keeping it for historical reference only.  
+> For my current work, see the **Four Horsemen** portfolio:  
+> [Skylight Guardian](https://github.com/paul-yi/skylight-guardian) · [Hawkeye-SAR](https://github.com/paul-yi/hawkeye-sar) · [CheckMyMeds v2](https://github.com/paul-yi/checkmymeds) · [Med-RAG-Edge](https://github.com/paul-yi/med-rag-edge)
+
 # AWS DevOps Demo
 
 ![CI Workflow](https://github.com/paulcyi/aws-devops-demo/actions/workflows/ci.yaml/badge.svg?branch=main&event=push)
